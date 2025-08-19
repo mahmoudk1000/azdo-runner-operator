@@ -18,7 +18,7 @@ public class RunnerPoolFinalizer : IEntityFinalizer<V1RunnerPoolEntity>
 
     public async Task FinalizeAsync(V1RunnerPoolEntity entity, CancellationToken cancellationToken)
     {
-        _logger.LogInformation("🧹 Finalizing RunnerPool {Name}, cleaning up all agent pods", entity.Metadata.Name);
+        _logger.LogInformation("Finalizing RunnerPool {Name}, cleaning up all agent pods", entity.Metadata.Name);
 
         try
         {
@@ -30,16 +30,16 @@ public class RunnerPoolFinalizer : IEntityFinalizer<V1RunnerPoolEntity>
 
             // 2. Get remaining active pods and delete them individually
             var activePods = await _kubernetesPodService.GetActivePodsAsync(entity);
-            
+
             if (activePods.Count > 0)
             {
-                _logger.LogInformation("🗑️ Deleting {ActivePodCount} remaining active pods for RunnerPool {Name}", 
+                _logger.LogInformation("Deleting {ActivePodCount} remaining active pods for RunnerPool {Name}",
                     activePods.Count, entity.Metadata.Name);
 
                 foreach (var pod in activePods)
                 {
                     await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name, namespaceName);
-                    _logger.LogInformation("🗑️ Deleted active pod {PodName} (Phase: {Phase}) during RunnerPool finalization", 
+                    _logger.LogInformation("Deleted active pod {PodName} (Phase: {Phase}) during RunnerPool finalization",
                         pod.Metadata.Name, pod.Status?.Phase);
                 }
             }
@@ -48,21 +48,21 @@ public class RunnerPoolFinalizer : IEntityFinalizer<V1RunnerPoolEntity>
             var remainingPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
             if (remainingPods.Count > 0)
             {
-                _logger.LogWarning("⚠️ Found {RemainingPodCount} remaining pods after cleanup, force deleting...", remainingPods.Count);
-                
+                _logger.LogWarning("Found {RemainingPodCount} remaining pods after cleanup, force deleting...", remainingPods.Count);
+
                 foreach (var pod in remainingPods)
                 {
                     await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name, namespaceName);
-                    _logger.LogInformation("🗑️ Force deleted remaining pod {PodName} (Phase: {Phase})", 
+                    _logger.LogInformation("Force deleted remaining pod {PodName} (Phase: {Phase})",
                         pod.Metadata.Name, pod.Status?.Phase);
                 }
             }
 
-            _logger.LogInformation("✅ Successfully finalized RunnerPool {Name} - all agent pods cleaned up", entity.Metadata.Name);
+            _logger.LogInformation("Successfully finalized RunnerPool {Name} - all agent pods cleaned up", entity.Metadata.Name);
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "❌ Error finalizing RunnerPool {Name}", entity.Metadata.Name);
+            _logger.LogError(ex, "Error finalizing RunnerPool {Name}", entity.Metadata.Name);
             throw;
         }
     }
