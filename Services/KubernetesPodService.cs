@@ -7,9 +7,10 @@ namespace AzDORunner.Services;
 
 public interface IKubernetesPodService
 {
-    Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat);
+    Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat, bool isMinAgent = false);
     Task<List<V1Pod>> GetActivePodsAsync(V1RunnerPoolEntity runnerPool);
     Task<List<V1Pod>> GetAllRunnerPodsAsync(V1RunnerPoolEntity runnerPool);
+    Task<List<V1Pod>> GetMinAgentPodsAsync(V1RunnerPoolEntity runnerPool);
     Task DeletePodAsync(string podName, string namespaceName);
     Task DeleteCompletedPodsAsync(V1RunnerPoolEntity runnerPool);
 }
@@ -25,7 +26,7 @@ public class KubernetesPodService : IKubernetesPodService
         _logger = logger;
     }
 
-    public Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat)
+    public Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat, bool isMinAgent = false)
     {
         var podName = $"{runnerPool.Metadata.Name}-agent-{Guid.NewGuid().ToString("N")[..8]}";
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
@@ -44,6 +45,7 @@ public class KubernetesPodService : IKubernetesPodService
                     ["runner-pool"] = runnerPool.Metadata.Name,
                     ["managed-by"] = "azdo-runner-operator",
                     ["atos"] = "devops",
+                    ["min-agent"] = isMinAgent.ToString().ToLower()
                 },
                 OwnerReferences = new List<V1OwnerReference>
                 {
@@ -68,8 +70,8 @@ public class KubernetesPodService : IKubernetesPodService
                     {
                         Name = "agent",
                         Image = runnerPool.Spec.Image,
-                        // If TtlIdleSeconds > 0, let the agent run continuously and rely on finalizers for cleanup
-                        Args = runnerPool.Spec.TtlIdleSeconds == 0 ? new List<string> { "--once" } : null,
+                        // Min agents never use --once, regular agents use --once only when TtlIdleSeconds is 0
+                        Args = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? new List<string> { "--once" } : null,
                         Env = new List<V1EnvVar>
                         {
                             new()
@@ -131,9 +133,10 @@ public class KubernetesPodService : IKubernetesPodService
         try
         {
             var createdPod = _kubernetesClient.Create(pod);
-            var mode = runnerPool.Spec.TtlIdleSeconds == 0 ? "one-time (--once)" : "continuous";
-            _logger.LogInformation("Created agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds})",
-                podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds);
+            var agentType = isMinAgent ? "minimum" : "regular";
+            var mode = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? "one-time (--once)" : "continuous";
+            _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds})",
+                agentType, podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds);
             return Task.FromResult(createdPod);
         }
         catch (Exception ex)
@@ -184,6 +187,31 @@ public class KubernetesPodService : IKubernetesPodService
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to get all pods for runner pool {RunnerPoolName}", runnerPool.Metadata.Name);
+            return Task.FromResult(new List<V1Pod>());
+        }
+    }
+
+    public Task<List<V1Pod>> GetMinAgentPodsAsync(V1RunnerPoolEntity runnerPool)
+    {
+        var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
+
+        try
+        {
+            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+
+            // Get only minimum agent pods that are active
+            var minAgentPods = allPods.Where(pod =>
+                pod.Metadata.Labels?.ContainsKey("runner-pool") == true &&
+                pod.Metadata.Labels["runner-pool"] == runnerPool.Metadata.Name &&
+                pod.Metadata.Labels?.ContainsKey("min-agent") == true &&
+                pod.Metadata.Labels["min-agent"] == "true" &&
+                (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending")).ToList();
+
+            return Task.FromResult(minAgentPods);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get minimum agent pods for runner pool {RunnerPoolName}", runnerPool.Metadata.Name);
             return Task.FromResult(new List<V1Pod>());
         }
     }
