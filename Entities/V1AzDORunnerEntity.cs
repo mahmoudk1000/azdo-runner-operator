@@ -28,8 +28,7 @@ public class V1RunnerPoolEntity : CustomKubernetesEntity<V1RunnerPoolEntity.V1Ru
         [DataAnnotationsRequired]
         public string Image { get; set; } = string.Empty;
 
-        public int TtlSecondsAfterFinished { get; set; } = 3600;
-        public int TtlIdleSeconds { get; set; } = 300;
+        public int TtlIdleSeconds { get; set; } = 0;
         public int MaxAgents { get; set; } = 10;
     }
 

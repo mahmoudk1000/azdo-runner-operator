@@ -190,17 +190,37 @@ public class AzureDevOpsPollingService : BackgroundService
 
     private async Task CleanupIdleAgentsAsync(V1RunnerPoolEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
     {
-        var operatorOnlineIdleAgents = azureAgents.Where(agent =>
-            agent.Status == "Online" &&
-            IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
-            (agent.LastActive == null || agent.LastActive < DateTime.UtcNow.AddMinutes(-2)))
-            .ToList();
+        // If TtlIdleSeconds is 0, remove agents immediately when no work is queued
+        // If TtlIdleSeconds > 0, only remove agents that have been idle for that many seconds
+        var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
+
+        List<Agent> operatorOnlineIdleAgents;
+
+        if (ttlIdleSeconds == 0)
+        {
+            // Remove all online operator-managed agents immediately when no work is queued
+            operatorOnlineIdleAgents = azureAgents.Where(agent =>
+                agent.Status == "Online" &&
+                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name))
+                .ToList();
+        }
+        else
+        {
+            // Only remove agents that have been idle for the specified duration
+            var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
+            operatorOnlineIdleAgents = azureAgents.Where(agent =>
+                agent.Status == "Online" &&
+                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
+                (agent.LastActive == null || agent.LastActive < idleThreshold))
+                .ToList();
+        }
 
         foreach (var idleAgent in operatorOnlineIdleAgents)
         {
             try
             {
-                _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work", idleAgent.Name);
+                _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
+                    idleAgent.Name, ttlIdleSeconds);
                 await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, idleAgent.Name, pat);
 
                 var pod = pods.FirstOrDefault(p => p.Metadata.Name == idleAgent.Name);
