@@ -117,12 +117,10 @@ spec:
                 type: string
               image:
                 type: string
-              ttlSecondsAfterFinished:
-                format: int32
-                type: integer
               ttlIdleSeconds:
                 format: int32
                 type: integer
+                default: 0
               maxAgents:
                 format: int32
                 type: integer
