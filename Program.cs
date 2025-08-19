@@ -41,5 +41,5 @@ builder.Services.AddHealthChecks()
 
 var host = builder.Build();
 
-// Run as console application (no web server, no browser)
+// Run
 await host.RunAsync();

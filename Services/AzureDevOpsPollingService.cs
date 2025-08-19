@@ -124,9 +124,18 @@ public class AzureDevOpsPollingService : BackgroundService
         // 1. Clean up completed agents/pods
         await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
 
-        // 2. Clean up idle agents if no work
-        if (queuedJobs == 0)
+        // 2. Clean up idle agents based on TtlIdleSeconds configuration
+        if (entity.Spec.TtlIdleSeconds == 0)
         {
+            // For immediate cleanup mode (--once), only clean up when no work is queued
+            if (queuedJobs == 0)
+            {
+                await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
+            }
+        }
+        else
+        {
+            // For continuous mode, clean up agents that have exceeded TtlIdleSeconds regardless of queue status
             await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
         }
 

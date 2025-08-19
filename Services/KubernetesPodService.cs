@@ -42,7 +42,8 @@ public class KubernetesPodService : IKubernetesPodService
                 {
                     ["app"] = "azdo-runner",
                     ["runner-pool"] = runnerPool.Metadata.Name,
-                    ["managed-by"] = "azdo-runner-operator"
+                    ["managed-by"] = "azdo-runner-operator",
+                    ["atos"] = "devops",
                 },
                 OwnerReferences = new List<V1OwnerReference>
                 {
@@ -67,8 +68,8 @@ public class KubernetesPodService : IKubernetesPodService
                     {
                         Name = "agent",
                         Image = runnerPool.Spec.Image,
-                        Command = new List<string> { "./start.sh" },
-                        Args = new List<string> { "--once" },
+                        // If TtlIdleSeconds > 0, let the agent run continuously and rely on finalizers for cleanup
+                        Args = runnerPool.Spec.TtlIdleSeconds == 0 ? new List<string> { "--once" } : null,
                         Env = new List<V1EnvVar>
                         {
                             new()
@@ -130,7 +131,9 @@ public class KubernetesPodService : IKubernetesPodService
         try
         {
             var createdPod = _kubernetesClient.Create(pod);
-            _logger.LogInformation("✅ Created agent pod {PodName} in namespace {Namespace}", podName, namespaceName);
+            var mode = runnerPool.Spec.TtlIdleSeconds == 0 ? "one-time (--once)" : "continuous";
+            _logger.LogInformation("Created agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds})",
+                podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds);
             return Task.FromResult(createdPod);
         }
         catch (Exception ex)
@@ -190,7 +193,7 @@ public class KubernetesPodService : IKubernetesPodService
         try
         {
             _kubernetesClient.Delete<V1Pod>(podName, namespaceName);
-            _logger.LogInformation("🗑️ Deleted pod {PodName} in namespace {Namespace}", podName, namespaceName);
+            _logger.LogInformation("Deleted pod {PodName} in namespace {Namespace}", podName, namespaceName);
             return Task.CompletedTask;
         }
         catch (Exception ex)
@@ -224,7 +227,7 @@ public class KubernetesPodService : IKubernetesPodService
                 try
                 {
                     _kubernetesClient.Delete<V1Pod>(pod.Metadata.Name, namespaceName);
-                    _logger.LogInformation("🗑️ Bulk deleted completed pod {PodName} (Phase: {Phase})",
+                    _logger.LogInformation("Bulk deleted completed pod {PodName} (Phase: {Phase})",
                         pod.Metadata.Name, pod.Status?.Phase);
                     deletedCount++;
                 }
@@ -236,7 +239,7 @@ public class KubernetesPodService : IKubernetesPodService
 
             if (deletedCount > 0)
             {
-                _logger.LogInformation("✅ Bulk deleted {DeletedCount} completed pods for RunnerPool {Name}",
+                _logger.LogInformation("Bulk deleted {DeletedCount} completed pods for RunnerPool {Name}",
                     deletedCount, runnerPool.Metadata.Name);
             }
             else
