@@ -124,7 +124,10 @@ public class AzureDevOpsPollingService : BackgroundService
         // 1. Clean up completed agents/pods
         await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
 
-        // 2. Clean up idle agents based on TtlIdleSeconds configuration
+        // 2. Ensure minimum agents are running
+        await EnsureMinimumAgentsAsync(entity, pat);
+
+        // 3. Clean up idle agents based on TtlIdleSeconds configuration
         if (entity.Spec.TtlIdleSeconds == 0)
         {
             // For immediate cleanup mode (--once), only clean up when no work is queued
@@ -139,7 +142,7 @@ public class AzureDevOpsPollingService : BackgroundService
             await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
         }
 
-        // 3. Scale up if needed - but consider both Azure agents AND running pods
+        // 4. Scale up if needed - but consider both Azure agents AND running pods
         if (queuedJobs > 0)
         {
             await ScaleUpForQueuedWorkAsync(entity, pat, queuedJobs, azureAgents, activePods.Count);
@@ -203,23 +206,29 @@ public class AzureDevOpsPollingService : BackgroundService
         // If TtlIdleSeconds > 0, only remove agents that have been idle for that many seconds
         var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
 
+        // Get minimum agent pods to protect them from cleanup
+        var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
+        var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
+
         List<Agent> operatorOnlineIdleAgents;
 
         if (ttlIdleSeconds == 0)
         {
-            // Remove all online operator-managed agents immediately when no work is queued
+            // Remove all online operator-managed agents immediately when no work is queued (except minimum agents)
             operatorOnlineIdleAgents = azureAgents.Where(agent =>
                 agent.Status == "Online" &&
-                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name))
+                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
+                !minAgentNames.Contains(agent.Name)) // Protect minimum agents
                 .ToList();
         }
         else
         {
-            // Only remove agents that have been idle for the specified duration
+            // Only remove agents that have been idle for the specified duration (except minimum agents)
             var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
             operatorOnlineIdleAgents = azureAgents.Where(agent =>
                 agent.Status == "Online" &&
                 IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
+                !minAgentNames.Contains(agent.Name) && // Protect minimum agents
                 (agent.LastActive == null || agent.LastActive < idleThreshold))
                 .ToList();
         }
@@ -351,5 +360,39 @@ public class AzureDevOpsPollingService : BackgroundService
 
         var suffix = agentName.Substring(expectedPrefix.Length);
         return suffix.Length == 8 && suffix.All(c => char.IsLetterOrDigit(c));
+    }
+
+    private async Task EnsureMinimumAgentsAsync(V1RunnerPoolEntity entity, string pat)
+    {
+        if (entity.Spec.MinAgents <= 0)
+        {
+            return; // No minimum agents required
+        }
+
+        try
+        {
+            var currentMinAgents = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
+            var neededMinAgents = entity.Spec.MinAgents - currentMinAgents.Count;
+
+            if (neededMinAgents > 0)
+            {
+                _logger.LogInformation("Creating {NeededMinAgents} minimum agents for pool '{PoolName}' (current: {CurrentMinAgents}, required: {MinAgents})",
+                    neededMinAgents, entity.Metadata.Name, currentMinAgents.Count, entity.Spec.MinAgents);
+
+                for (int i = 0; i < neededMinAgents; i++)
+                {
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, isMinAgent: true);
+                }
+            }
+            else
+            {
+                _logger.LogDebug("Minimum agent requirement satisfied for pool '{PoolName}' ({CurrentMinAgents}/{MinAgents})",
+                    entity.Metadata.Name, currentMinAgents.Count, entity.Spec.MinAgents);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to ensure minimum agents for pool '{PoolName}'", entity.Metadata.Name);
+        }
     }
 }
