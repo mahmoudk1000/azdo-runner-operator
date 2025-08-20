@@ -5,7 +5,7 @@ using Microsoft.Extensions.Logging;
 
 namespace AzDORunner.Finalizer;
 
-public class RunnerPoolFinalizer : IEntityFinalizer<V1RunnerPoolEntity>
+public class RunnerPoolFinalizer : IEntityFinalizer<V1AzDORunnerEntity>
 {
     private readonly ILogger<RunnerPoolFinalizer> _logger;
     private readonly IKubernetesPodService _kubernetesPodService;
@@ -16,7 +16,7 @@ public class RunnerPoolFinalizer : IEntityFinalizer<V1RunnerPoolEntity>
         _kubernetesPodService = kubernetesPodService;
     }
 
-    public async Task FinalizeAsync(V1RunnerPoolEntity entity, CancellationToken cancellationToken)
+    public async Task FinalizeAsync(V1AzDORunnerEntity entity, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Finalizing RunnerPool {Name}, cleaning up all agent pods", entity.Metadata.Name);
 

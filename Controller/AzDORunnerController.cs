@@ -1,6 +1,5 @@
 using AzDORunner.Entities;
 using AzDORunner.Services;
-using AzDORunner.Model.Domain;
 using k8s.Models;
 using KubeOps.Abstractions.Controller;
 using KubeOps.Abstractions.Rbac;
@@ -9,10 +8,10 @@ using Microsoft.Extensions.Logging;
 
 namespace AzDORunner.Controller;
 
-[EntityRbac(typeof(V1RunnerPoolEntity), Verbs = RbacVerb.All)]
+[EntityRbac(typeof(V1AzDORunnerEntity), Verbs = RbacVerb.All)]
 [EntityRbac(typeof(V1Pod), Verbs = RbacVerb.All)]
 [EntityRbac(typeof(V1Secret), Verbs = RbacVerb.Get | RbacVerb.List)]
-public class RunnerPoolController : IEntityController<V1RunnerPoolEntity>
+public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
 {
     private readonly ILogger<RunnerPoolController> _logger;
     private readonly IAzureDevOpsService _azureDevOpsService;
@@ -34,7 +33,7 @@ public class RunnerPoolController : IEntityController<V1RunnerPoolEntity>
         _pollingService = pollingService;
     }
 
-    public async Task ReconcileAsync(V1RunnerPoolEntity entity, CancellationToken cancellationToken)
+    public async Task ReconcileAsync(V1AzDORunnerEntity entity, CancellationToken cancellationToken)
     {
         _logger.LogInformation("Reconciling RunnerPool {Name}", entity.Metadata.Name);
 
@@ -67,18 +66,18 @@ public class RunnerPoolController : IEntityController<V1RunnerPoolEntity>
         }
     }
 
-    public Task DeletedAsync(V1RunnerPoolEntity entity, CancellationToken cancellationToken)
+    public Task DeletedAsync(V1AzDORunnerEntity entity, CancellationToken cancellationToken)
     {
         _logger.LogInformation("RunnerPool {Name} deleted, cleaning up resources", entity.Metadata.Name);
         _pollingService.UnregisterPool(entity.Metadata.Name);
         return Task.CompletedTask;
     }
 
-    private void UpdateStatus(V1RunnerPoolEntity entity, string status, string? error)
+    private void UpdateStatus(V1AzDORunnerEntity entity, string status, string? error)
     {
         try
         {
-            var freshEntity = _kubernetesClient.Get<V1RunnerPoolEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
             if (freshEntity != null)
             {
                 freshEntity.Status.ConnectionStatus = status;
@@ -89,7 +88,7 @@ public class RunnerPoolController : IEntityController<V1RunnerPoolEntity>
                 if (!string.IsNullOrEmpty(error))
                 {
                     freshEntity.Status.Conditions.Clear();
-                    freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+                    freshEntity.Status.Conditions.Add(new V1AzDORunnerEntity.StatusCondition
                     {
                         Type = "Error",
                         Status = "True",
@@ -108,7 +107,7 @@ public class RunnerPoolController : IEntityController<V1RunnerPoolEntity>
         }
     }
 
-    private Task<string?> GetPatFromSecretAsync(V1RunnerPoolEntity entity)
+    private Task<string?> GetPatFromSecretAsync(V1AzDORunnerEntity entity)
     {
         try
         {
