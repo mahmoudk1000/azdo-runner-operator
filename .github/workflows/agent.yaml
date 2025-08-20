@@ -9,6 +9,24 @@ on:
     paths:
       - "agent/**"
   workflow_dispatch:
+    inputs:
+      custom_capability:
+        description: "Custom capability name (e.g., python, go, rust)"
+        required: false
+        type: string
+      custom_packages:
+        description: 'Custom packages to install (space-separated, e.g., "python3 python3-pip golang-go")'
+        required: false
+        type: string
+      custom_commands:
+        description: 'Custom installation commands (use \\n for newlines)'
+        required: false
+        type: string
+      build_all:
+        description: "Build all predefined runtimes"
+        required: false
+        type: boolean
+        default: true
 
 env:
   GHCR_REGISTRY: ghcr.io
@@ -19,8 +37,8 @@ jobs:
   build-and-push:
     runs-on: ubuntu-latest
 
-    # Only run if this is not from a pull request
-    if: github.event_name != 'pull_request'
+    # Only run if this is not from a pull request and either build_all is true or no custom capability specified
+    if: github.event_name != 'pull_request' && (github.event.inputs.build_all != 'false' || github.event.inputs.custom_capability == '')
 
     strategy:
       matrix:
@@ -90,3 +108,170 @@ jobs:
             ${{ steps.meta-ghcr.outputs.tags }}
             ${{ steps.meta-dockerhub.outputs.tags }}
           labels: ${{ steps.meta-ghcr.outputs.labels }}
+
+  build-custom-capability:
+    runs-on: ubuntu-latest
+
+    # Only run for custom capability builds when specified
+    if: github.event_name != 'pull_request' && github.event.inputs.custom_capability != ''
+
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Validate inputs
+        run: |
+          if [ -z "${{ github.event.inputs.custom_capability }}" ]; then
+            echo "Error: custom_capability is required for custom builds"
+            exit 1
+          fi
+          echo "Building custom capability: ${{ github.event.inputs.custom_capability }}"
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.GHCR_REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Extract metadata for GHCR
+        id: meta-ghcr-custom
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=tag,suffix=-${{ github.event.inputs.custom_capability }}
+            type=ref,event=branch,suffix=-${{ github.event.inputs.custom_capability }}
+            type=raw,value=latest-${{ github.event.inputs.custom_capability }}
+            type=sha,format=short,suffix=-${{ github.event.inputs.custom_capability }}
+
+      - name: Extract metadata for Docker Hub
+        id: meta-dockerhub-custom
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/azdo-runner-agent
+          tags: |
+            type=ref,event=tag,suffix=-${{ github.event.inputs.custom_capability }}
+            type=ref,event=branch,suffix=-${{ github.event.inputs.custom_capability }}
+            type=raw,value=latest-${{ github.event.inputs.custom_capability }}
+            type=sha,format=short,suffix=-${{ github.event.inputs.custom_capability }}
+
+      - name: Create custom Dockerfile
+        run: |
+          cat > ./agent/Dockerfile.custom << 'EOF'
+          # Multi-stage build for Azure DevOps agent with custom capability
+          FROM ubuntu:22.04 as base
+
+          # Avoid prompts from apt
+          ENV DEBIAN_FRONTEND=noninteractive
+
+          # Install base packages including sudo
+          RUN apt-get update && apt-get install -y \
+              curl \
+              git \
+              jq \
+              libicu70 \
+              wget \
+              unzip \
+              apt-transport-https \
+              ca-certificates \
+              gnupg \
+              lsb-release \
+              software-properties-common \
+              sudo \
+              && rm -rf /var/lib/apt/lists/*
+
+          # Install Docker CLI
+          RUN curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg \
+              && echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null \
+              && apt-get update \
+              && apt-get install -y docker-ce-cli \
+              && rm -rf /var/lib/apt/lists/*
+
+          # Create agent user and add to sudoers
+          RUN useradd -m -s /bin/bash azuredevops && \
+              echo "azuredevops ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers
+
+          # Custom capability installation stage
+          FROM base as custom
+
+          ARG CUSTOM_PACKAGES
+          ARG CUSTOM_COMMANDS
+
+          # Install custom packages if specified
+          RUN if [ -n "$CUSTOM_PACKAGES" ]; then \
+                  apt-get update && \
+                  apt-get install -y $CUSTOM_PACKAGES && \
+                  rm -rf /var/lib/apt/lists/*; \
+              fi
+
+          # Run custom installation commands if specified
+          RUN if [ -n "$CUSTOM_COMMANDS" ]; then \
+                  bash -c "$(echo '$CUSTOM_COMMANDS' | sed 's/\\n/\n/g')"; \
+              fi
+
+          # Final stage
+          FROM custom as final
+
+          # Set up Azure DevOps agent
+          WORKDIR /home/azuredevops
+          USER azuredevops
+
+          # Download and extract Azure DevOps agent
+          RUN wget -O agent.tar.gz https://vstsagentpackage.azureedge.net/agent/3.232.0/vsts-agent-linux-x64-3.232.0.tar.gz \
+              && tar -xzf agent.tar.gz \
+              && rm agent.tar.gz
+
+          # Set capability environment variable
+          ARG CUSTOM_CAPABILITY
+          ENV AGENT_CAPABILITY=$CUSTOM_CAPABILITY
+
+          # Create capability file for the custom capability
+          RUN mkdir -p .capabilities && \
+              if [ -n "$CUSTOM_CAPABILITY" ]; then \
+                  echo "true" > .capabilities/$CUSTOM_CAPABILITY; \
+              fi
+
+          # Copy startup script
+          COPY start.sh ./
+          USER root
+          RUN chown azuredevops:azuredevops start.sh && chmod +x start.sh
+          USER azuredevops
+
+          ENTRYPOINT ["./start.sh"]
+          EOF
+
+      - name: Build and push custom Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./agent
+          file: ./agent/Dockerfile.custom
+          push: true
+          build-args: |
+            CUSTOM_CAPABILITY=${{ github.event.inputs.custom_capability }}
+            CUSTOM_PACKAGES=${{ github.event.inputs.custom_packages }}
+            CUSTOM_COMMANDS=${{ github.event.inputs.custom_commands }}
+          tags: |
+            ${{ steps.meta-ghcr-custom.outputs.tags }}
+            ${{ steps.meta-dockerhub-custom.outputs.tags }}
+          labels: ${{ steps.meta-ghcr-custom.outputs.labels }}
+
+      - name: Output build summary
+        run: |
+          echo "## Custom Capability Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "- **Capability:** ${{ github.event.inputs.custom_capability }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom Packages:** ${{ github.event.inputs.custom_packages || 'None' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom Commands:** ${{ github.event.inputs.custom_commands || 'None' }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Image Tags:**" >> $GITHUB_STEP_SUMMARY
+          echo "${{ steps.meta-ghcr-custom.outputs.tags }}" | sed 's/^/  - /' >> $GITHUB_STEP_SUMMARY
