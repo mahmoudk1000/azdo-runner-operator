@@ -114,27 +114,24 @@ public class AzureDevOpsService : IAzureDevOpsService
         if (demands == null || !demands.Any())
             return null;
 
-        // Look for common capability patterns in demands
+        // Return the first demand found - this allows exact keyword matching
+        // If user configures "mykeyword" in capabilityImages and sets demands: [mykeyword]
+        // it will return "mykeyword" directly for exact matching
         foreach (var demand in demands)
         {
-            var lowerDemand = demand.ToLowerInvariant();
+            var cleanDemand = demand.Trim().ToLowerInvariant();
 
-            // Check for runtime-specific demands
-            if (lowerDemand.Contains("java") || lowerDemand.Contains("jdk") || lowerDemand.Contains("maven"))
-                return "java";
-
-            if (lowerDemand.Contains("dotnet") || lowerDemand.Contains(".net") || lowerDemand.Contains("nuget"))
-                return "dotnet";
-
-            if (lowerDemand.Contains("node") || lowerDemand.Contains("npm") || lowerDemand.Contains("javascript"))
-                return "nodejs";
-
-            // Add more capability patterns as needed
+            // Return the demand as-is for direct matching with capabilityImages keys
+            // This enables custom keywords like "mykeyword", "gpu", "docker", etc.
+            if (!string.IsNullOrEmpty(cleanDemand))
+            {
+                _logger.LogDebug("Found capability demand: '{Demand}'", cleanDemand);
+                return cleanDemand;
+            }
         }
 
-        return null; // No specific capability detected, use base image
+        return null; // No demands found
     }
-
     private readonly HttpClient _httpClient;
     private readonly ILogger<AzureDevOpsService> _logger;
 

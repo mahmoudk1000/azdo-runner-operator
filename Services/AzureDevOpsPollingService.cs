@@ -140,6 +140,12 @@ public class AzureDevOpsPollingService : BackgroundService
             // 2. Ensure minimum agents are running
             await EnsureMinimumAgentsAsync(entity, pat);
 
+            // 2.1. Optimize minimum agents for required capabilities
+            if (queuedJobs > 0)
+            {
+                await OptimizeMinAgentsForCapabilitiesAsync(entity, pat);
+            }
+
             // 2.5. Ensure maximum agents limit is respected
             await EnsureMaximumAgentsLimitAsync(entity, pat);
 
@@ -402,6 +408,156 @@ public class AzureDevOpsPollingService : BackgroundService
             {
                 await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
             }
+        }
+    }
+
+    private async Task OptimizeMinAgentsForCapabilitiesAsync(V1AzDORunnerEntity entity, string pat)
+    {
+        try
+        {
+            // Only optimize if capability-aware mode is enabled and we have min agents
+            if (!entity.Spec.CapabilityAware || entity.Spec.MinAgents <= 0)
+            {
+                return;
+            }
+
+            _logger.LogDebug("Checking if minimum agents need capability optimization for pool '{PoolName}'", entity.Metadata.Name);
+
+            // Get current min agents and queued jobs with capabilities
+            var currentMinAgents = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
+            if (currentMinAgents.Count == 0)
+            {
+                return;
+            }
+
+            // Get queued jobs with their capability requirements
+            var queuedJobsWithCapabilities = await _azureDevOpsService.GetQueuedJobsWithCapabilitiesAsync(
+                entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
+            if (!queuedJobsWithCapabilities.Any())
+            {
+                return;
+            }
+
+            // Group jobs by required capability and find capabilities we need but don't have
+            var requiredCapabilities = queuedJobsWithCapabilities
+                .Where(job => !string.IsNullOrEmpty(job.RequiredCapability))
+                .GroupBy(job => job.RequiredCapability!)
+                .Where(g => entity.Spec.CapabilityImages.ContainsKey(g.Key)) // Only consider configured capabilities
+                .ToDictionary(g => g.Key, g => g.Count());
+
+            if (!requiredCapabilities.Any())
+            {
+                _logger.LogDebug("No configured capabilities required by queued jobs");
+                return;
+            }
+
+            // Check which capabilities are missing from current min agents
+            var currentMinAgentCapabilities = currentMinAgents
+                .Select(pod => pod.Metadata.Labels?.TryGetValue("capability", out var cap) == true ? cap : "base")
+                .ToList();
+
+            var missingCapabilities = requiredCapabilities.Keys
+                .Where(capability => !currentMinAgentCapabilities.Contains(capability))
+                .ToList();
+
+            if (!missingCapabilities.Any())
+            {
+                _logger.LogDebug("All required capabilities are covered by existing minimum agents");
+                return;
+            }
+
+            _logger.LogInformation("Pool '{PoolName}': Required capabilities {RequiredCapabilities}, Current min agent capabilities {CurrentCapabilities}, Missing {MissingCapabilities}",
+                entity.Metadata.Name,
+                string.Join(", ", requiredCapabilities.Keys),
+                string.Join(", ", currentMinAgentCapabilities),
+                string.Join(", ", missingCapabilities));
+
+            // Replace base agents with capability-specific agents
+            var baseAgents = currentMinAgents
+                .Where(pod =>
+                {
+                    if (pod.Metadata.Labels?.TryGetValue("capability", out var cap) == true)
+                    {
+                        return cap == "base";
+                    }
+                    return true; // No capability label means it's a base agent
+                })
+                .OrderBy(pod => pod.Metadata.CreationTimestamp)
+                .ToList();
+
+            var replacementsNeeded = Math.Min(missingCapabilities.Count, baseAgents.Count);
+
+            if (replacementsNeeded == 0)
+            {
+                _logger.LogInformation("No base minimum agents available to replace with capability-specific agents");
+                return;
+            }
+
+            _logger.LogInformation("Replacing {ReplacementsNeeded} base minimum agents with capability-specific agents", replacementsNeeded);
+
+            // Replace base agents with required capability agents
+            for (int i = 0; i < replacementsNeeded; i++)
+            {
+                var baseAgentToReplace = baseAgents[i];
+                var capabilityToAdd = missingCapabilities[i];
+
+                try
+                {
+                    // Create new capability-specific min agent
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, isMinAgent: true, capabilityToAdd);
+                    _logger.LogInformation("Created capability-specific minimum agent with capability '{Capability}'", capabilityToAdd);
+
+                    // Remove the base agent
+                    await RemoveSpecificMinAgentAsync(entity, pat, baseAgentToReplace);
+                    _logger.LogInformation("Replaced base minimum agent {AgentName} with {Capability}-capable agent",
+                        baseAgentToReplace.Metadata.Name, capabilityToAdd);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to replace base minimum agent {AgentName} with {Capability}-capable agent",
+                        baseAgentToReplace.Metadata.Name, capabilityToAdd);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to optimize minimum agents for capabilities in pool '{PoolName}'", entity.Metadata.Name);
+        }
+    }
+
+    private async Task RemoveSpecificMinAgentAsync(V1AzDORunnerEntity entity, string pat, V1Pod podToRemove)
+    {
+        try
+        {
+            // Try to unregister from Azure DevOps first
+            var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+            var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
+
+            if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
+            {
+                var unregistered = await _azureDevOpsService.UnregisterAgentAsync(
+                    entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
+
+                if (unregistered)
+                {
+                    _logger.LogInformation("Unregistered minimum agent '{AgentName}' from Azure DevOps", correspondingAgent.Name);
+                }
+                else
+                {
+                    _logger.LogWarning("Failed to unregister minimum agent '{AgentName}' from Azure DevOps, but continuing with pod deletion",
+                        correspondingAgent.Name);
+                }
+            }
+
+            // Delete the pod
+            await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
+                podToRemove.Metadata.NamespaceProperty ?? "default");
+            _logger.LogInformation("Deleted minimum agent pod '{PodName}'", podToRemove.Metadata.Name);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to remove specific minimum agent '{PodName}'", podToRemove.Metadata.Name);
         }
     }
 
