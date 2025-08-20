@@ -7,12 +7,12 @@ namespace AzDORunner.Services;
 
 public interface IKubernetesPodService
 {
-    Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat, bool isMinAgent = false);
-    Task<List<V1Pod>> GetActivePodsAsync(V1RunnerPoolEntity runnerPool);
-    Task<List<V1Pod>> GetAllRunnerPodsAsync(V1RunnerPoolEntity runnerPool);
-    Task<List<V1Pod>> GetMinAgentPodsAsync(V1RunnerPoolEntity runnerPool);
+    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false);
+    Task<List<V1Pod>> GetActivePodsAsync(V1AzDORunnerEntity runnerPool);
+    Task<List<V1Pod>> GetAllRunnerPodsAsync(V1AzDORunnerEntity runnerPool);
+    Task<List<V1Pod>> GetMinAgentPodsAsync(V1AzDORunnerEntity runnerPool);
     Task DeletePodAsync(string podName, string namespaceName);
-    Task DeleteCompletedPodsAsync(V1RunnerPoolEntity runnerPool);
+    Task DeleteCompletedPodsAsync(V1AzDORunnerEntity runnerPool);
 }
 
 public class KubernetesPodService : IKubernetesPodService
@@ -26,7 +26,7 @@ public class KubernetesPodService : IKubernetesPodService
         _logger = logger;
     }
 
-    public Task<V1Pod> CreateAgentPodAsync(V1RunnerPoolEntity runnerPool, string pat, bool isMinAgent = false)
+    public Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false)
     {
         var podName = $"{runnerPool.Metadata.Name}-agent-{Guid.NewGuid().ToString("N")[..8]}";
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
@@ -146,7 +146,7 @@ public class KubernetesPodService : IKubernetesPodService
         }
     }
 
-    public Task<List<V1Pod>> GetActivePodsAsync(V1RunnerPoolEntity runnerPool)
+    public Task<List<V1Pod>> GetActivePodsAsync(V1AzDORunnerEntity runnerPool)
     {
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
 
@@ -169,7 +169,7 @@ public class KubernetesPodService : IKubernetesPodService
         }
     }
 
-    public Task<List<V1Pod>> GetAllRunnerPodsAsync(V1RunnerPoolEntity runnerPool)
+    public Task<List<V1Pod>> GetAllRunnerPodsAsync(V1AzDORunnerEntity runnerPool)
     {
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
 
@@ -191,7 +191,7 @@ public class KubernetesPodService : IKubernetesPodService
         }
     }
 
-    public Task<List<V1Pod>> GetMinAgentPodsAsync(V1RunnerPoolEntity runnerPool)
+    public Task<List<V1Pod>> GetMinAgentPodsAsync(V1AzDORunnerEntity runnerPool)
     {
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
 
@@ -231,7 +231,7 @@ public class KubernetesPodService : IKubernetesPodService
         }
     }
 
-    public Task DeleteCompletedPodsAsync(V1RunnerPoolEntity runnerPool)
+    public Task DeleteCompletedPodsAsync(V1AzDORunnerEntity runnerPool)
     {
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
 

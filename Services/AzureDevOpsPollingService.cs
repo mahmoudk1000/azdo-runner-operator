@@ -28,7 +28,7 @@ public class AzureDevOpsPollingService : BackgroundService
         _kubernetesClient = kubernetesClient;
     }
 
-    public void RegisterPool(V1RunnerPoolEntity entity, string pat)
+    public void RegisterPool(V1AzDORunnerEntity entity, string pat)
     {
         var poolName = entity.Metadata.Name;
         var pollInfo = new PoolPollInfo
@@ -177,7 +177,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task CleanupCompletedAgentsAsync(V1RunnerPoolEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> allPods)
+    private async Task CleanupCompletedAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> allPods)
     {
         var completedPods = allPods.Where(pod =>
             pod.Status?.Phase == "Succeeded" ||
@@ -225,7 +225,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task CleanupIdleAgentsAsync(V1RunnerPoolEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
+    private async Task CleanupIdleAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
     {
         // If TtlIdleSeconds is 0, remove agents immediately when no work is queued
         // If TtlIdleSeconds > 0, only remove agents that have been idle for that many seconds
@@ -280,7 +280,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task ScaleUpForQueuedWorkAsync(V1RunnerPoolEntity entity, string pat, int queuedJobs, List<Agent> agents, int activePods)
+    private async Task ScaleUpForQueuedWorkAsync(V1AzDORunnerEntity entity, string pat, int queuedJobs, List<Agent> agents, int activePods)
     {
         // Filter to only count operator-managed agents (ignore external agents like "Labby")
         var operatorManagedAgents = agents.Where(a => IsOperatorManagedAgent(a.Name, entity.Metadata.Name)).ToList();
@@ -331,11 +331,11 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private void UpdateEntityStatus(V1RunnerPoolEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Connected", string? lastError = null)
+    private void UpdateEntityStatus(V1AzDORunnerEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Connected", string? lastError = null)
     {
         try
         {
-            var freshEntity = _kubernetesClient.Get<V1RunnerPoolEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
             if (freshEntity != null)
             {
                 // Filter to only count operator-managed agents for status
@@ -359,7 +359,7 @@ public class AzureDevOpsPollingService : BackgroundService
 
                 if (connectionStatus == "Connected")
                 {
-                    freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+                    freshEntity.Status.Conditions.Add(new V1AzDORunnerEntity.StatusCondition
                     {
                         Type = "Ready",
                         Status = "True",
@@ -370,7 +370,7 @@ public class AzureDevOpsPollingService : BackgroundService
                 }
                 else
                 {
-                    freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+                    freshEntity.Status.Conditions.Add(new V1AzDORunnerEntity.StatusCondition
                     {
                         Type = "Error",
                         Status = "True",
@@ -403,7 +403,7 @@ public class AzureDevOpsPollingService : BackgroundService
         return suffix.Length == 8 && suffix.All(c => char.IsLetterOrDigit(c));
     }
 
-    private async Task EnsureMinimumAgentsAsync(V1RunnerPoolEntity entity, string pat)
+    private async Task EnsureMinimumAgentsAsync(V1AzDORunnerEntity entity, string pat)
     {
         try
         {
@@ -467,7 +467,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task RemoveExcessMinimumAgentsAsync(V1RunnerPoolEntity entity, string pat, List<V1Pod> currentMinAgents, int countToRemove)
+    private async Task RemoveExcessMinimumAgentsAsync(V1AzDORunnerEntity entity, string pat, List<V1Pod> currentMinAgents, int countToRemove)
     {
         try
         {
@@ -512,7 +512,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task EnsureMaximumAgentsLimitAsync(V1RunnerPoolEntity entity, string pat)
+    private async Task EnsureMaximumAgentsLimitAsync(V1AzDORunnerEntity entity, string pat)
     {
         try
         {
@@ -571,7 +571,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task RemoveExcessAgentsAsync(V1RunnerPoolEntity entity, string pat, List<V1Pod> agentsToRemove)
+    private async Task RemoveExcessAgentsAsync(V1AzDORunnerEntity entity, string pat, List<V1Pod> agentsToRemove)
     {
         try
         {

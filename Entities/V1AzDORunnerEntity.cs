@@ -3,6 +3,7 @@ using KubeOps.Abstractions.Entities;
 using AzDORunner.Model.Domain;
 using DataAnnotationsRequired = System.ComponentModel.DataAnnotations.RequiredAttribute;
 using KubeOps.Abstractions.Entities.Attributes;
+using System.ComponentModel.DataAnnotations;
 
 namespace AzDORunner.Entities;
 
@@ -13,9 +14,9 @@ namespace AzDORunner.Entities;
 [GenericAdditionalPrinterColumn(".status.queuedJobs", "Queued", "integer")]
 [GenericAdditionalPrinterColumn(".status.agentsSummary", "Agents", "string")]
 [GenericAdditionalPrinterColumn(".status.runningAgents", "Running", "integer")]
-public class V1RunnerPoolEntity : CustomKubernetesEntity<V1RunnerPoolEntity.V1RunnerPoolEntitySpec, V1RunnerPoolEntity.V1RunnerPoolEntityStatus>
+public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1AzDORunnerEntitySpec, V1AzDORunnerEntity.V1AzDORunnerEntityStatus>
 {
-    public class V1RunnerPoolEntitySpec
+    public class V1AzDORunnerEntitySpec : IValidatableObject
     {
         [DataAnnotationsRequired]
         public string AzDoUrl { get; set; } = string.Empty;
@@ -29,12 +30,41 @@ public class V1RunnerPoolEntity : CustomKubernetesEntity<V1RunnerPoolEntity.V1Ru
         [DataAnnotationsRequired]
         public string Image { get; set; } = string.Empty;
 
+        [Range(0, int.MaxValue, ErrorMessage = "TtlIdleSeconds must be a non-negative value")]
         public int TtlIdleSeconds { get; set; } = 0;
+
+        [Range(0, int.MaxValue, ErrorMessage = "MinAgents must be a non-negative value")]
         public int MinAgents { get; set; } = 0;
+
+        [Range(1, int.MaxValue, ErrorMessage = "MaxAgents must be at least 1")]
         public int MaxAgents { get; set; } = 10;
+
+        public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
+        {
+            if (MinAgents > MaxAgents)
+            {
+                yield return new ValidationResult(
+                    $"MinAgents ({MinAgents}) cannot be greater than MaxAgents ({MaxAgents})",
+                    new[] { nameof(MinAgents), nameof(MaxAgents) });
+            }
+
+            if (MinAgents < 0)
+            {
+                yield return new ValidationResult(
+                    "MinAgents cannot be negative",
+                    new[] { nameof(MinAgents) });
+            }
+
+            if (MaxAgents < 1)
+            {
+                yield return new ValidationResult(
+                    "MaxAgents must be at least 1",
+                    new[] { nameof(MaxAgents) });
+            }
+        }
     }
 
-    public class V1RunnerPoolEntityStatus
+    public class V1AzDORunnerEntityStatus
     {
         public string ConnectionStatus { get; set; } = "Unknown";
         public string OrganizationName { get; set; } = string.Empty;
