@@ -4,7 +4,6 @@ using k8s.Models;
 using KubeOps.Abstractions.Controller;
 using KubeOps.Abstractions.Rbac;
 using KubeOps.KubernetesClient;
-using Microsoft.Extensions.Logging;
 
 namespace AzDORunner.Controller;
 

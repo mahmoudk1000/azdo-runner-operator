@@ -39,8 +39,17 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         [Range(1, int.MaxValue, ErrorMessage = "MaxAgents must be at least 1")]
         public int MaxAgents { get; set; } = 10;
 
+        public int PollIntervalSeconds { get; set; } = 5;
+
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
+            if (PollIntervalSeconds < 5)
+            {
+                yield return new ValidationResult(
+                    "PollIntervalSeconds must be at least 5 seconds",
+                    new[] { nameof(PollIntervalSeconds) });
+            }
+
             if (MinAgents > MaxAgents)
             {
                 yield return new ValidationResult(

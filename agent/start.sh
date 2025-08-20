@@ -49,4 +49,4 @@ fi
 
 echo "Agent version: $(./bin/Agent.Listener --version 2>/dev/null || echo 'unknown')"
 
-./run-docker.sh --once
+./run-docker.sh

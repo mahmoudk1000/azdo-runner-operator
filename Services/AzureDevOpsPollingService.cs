@@ -1,5 +1,3 @@
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using AzDORunner.Entities;
 using AzDORunner.Model.Domain;
 using KubeOps.KubernetesClient;
@@ -31,16 +29,27 @@ public class AzureDevOpsPollingService : BackgroundService
     public void RegisterPool(V1AzDORunnerEntity entity, string pat)
     {
         var poolName = entity.Metadata.Name;
-        var pollInfo = new PoolPollInfo
+        var pollInterval = entity.Spec.PollIntervalSeconds > 5 ? entity.Spec.PollIntervalSeconds : 5;
+        _poolsToMonitor.AddOrUpdate(poolName, (key) =>
         {
-            Entity = entity,
-            Pat = pat
-        };
-        pollInfo.LastPolled = DateTime.UtcNow.AddSeconds(-pollInfo.PollIntervalSeconds - 1); // Force immediate poll
-
-        _poolsToMonitor.AddOrUpdate(poolName, pollInfo, (key, old) => pollInfo);
-        _logger.LogInformation("Registered pool '{PoolName}' for Azure DevOps monitoring with {IntervalSeconds}s interval (immediate poll scheduled)",
-            poolName, pollInfo.PollIntervalSeconds);
+            var pollInfo = new PoolPollInfo
+            {
+                Entity = entity,
+                Pat = pat,
+                PollIntervalSeconds = pollInterval
+            };
+            pollInfo.LastPolled = DateTime.UtcNow.AddSeconds(-pollInfo.PollIntervalSeconds - 1); // Force immediate poll
+            return pollInfo;
+        }, (key, old) =>
+        {
+            old.Entity = entity;
+            old.Pat = pat;
+            old.PollIntervalSeconds = pollInterval;
+            old.LastPolled = DateTime.UtcNow.AddSeconds(-pollInterval - 1);
+            return old;
+        });
+        _logger.LogInformation("Registered/updated pool '{PoolName}' for Azure DevOps monitoring with {IntervalSeconds}s interval (immediate poll scheduled)",
+            poolName, pollInterval);
     }
 
     public void UnregisterPool(string poolName)
@@ -59,7 +68,7 @@ public class AzureDevOpsPollingService : BackgroundService
         {
             try
             {
-                _logger.LogInformation("Polling cycle - checking all registered pools");
+                _logger.LogDebug("Polling cycle - checking all registered pools");
                 await PollAllRegisteredPools();
                 await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // Check every 5 seconds
             }
@@ -164,7 +173,6 @@ public class AzureDevOpsPollingService : BackgroundService
             connectionStatus = "Disconnected";
             lastError = ex.Message;
 
-            // Still try to get local pod information for status update
             try
             {
                 var activePods = await _kubernetesPodService.GetActivePodsAsync(entity);
@@ -235,27 +243,22 @@ public class AzureDevOpsPollingService : BackgroundService
         var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
         var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
 
-        List<Agent> operatorOnlineIdleAgents;
 
-        if (ttlIdleSeconds == 0)
+        // Fetch all job requests for the pool to determine if an agent is running a job
+        var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
+        // Only remove agents that have been idle for the specified duration (except minimum agents and those running a job)
+        List<Agent> operatorOnlineIdleAgents = new();
+        if (ttlIdleSeconds > 0)
         {
-            // Remove all online operator-managed agents immediately when no work is queued (except minimum agents)
-            operatorOnlineIdleAgents = azureAgents.Where(agent =>
-                agent.Status == "Online" &&
-                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
-                !minAgentNames.Contains(agent.Name)) // Protect minimum agents
-                .ToList();
-        }
-        else
-        {
-            // Only remove agents that have been idle for the specified duration (except minimum agents)
             var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
             operatorOnlineIdleAgents = azureAgents.Where(agent =>
                 agent.Status == "Online" &&
                 IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
-                !minAgentNames.Contains(agent.Name) && // Protect minimum agents
-                (agent.LastActive == null || agent.LastActive < idleThreshold))
-                .ToList();
+                !minAgentNames.Contains(agent.Name) &&
+                (agent.LastActive == null || agent.LastActive < idleThreshold) &&
+                !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
+            ).ToList();
         }
 
         foreach (var idleAgent in operatorOnlineIdleAgents)
