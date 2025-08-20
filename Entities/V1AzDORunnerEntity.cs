@@ -8,6 +8,7 @@ namespace AzDORunner.Entities;
 
 [KubernetesEntity(Group = "devops.atos.net", ApiVersion = "v1alpha", Kind = "RunnerPool")]
 [GenericAdditionalPrinterColumn(".status.connectionStatus", "Status", "string")]
+[GenericAdditionalPrinterColumn(".spec.pool", "Pool", "string")]
 [GenericAdditionalPrinterColumn(".status.organizationName", "Organization", "string")]
 [GenericAdditionalPrinterColumn(".status.queuedJobs", "Queued", "integer")]
 [GenericAdditionalPrinterColumn(".status.agentsSummary", "Agents", "string")]
