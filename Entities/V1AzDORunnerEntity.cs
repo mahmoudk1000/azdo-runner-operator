@@ -30,6 +30,10 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         [DataAnnotationsRequired]
         public string Image { get; set; } = string.Empty;
 
+        public bool CapabilityAware { get; set; } = false;
+
+        public Dictionary<string, string> CapabilityImages { get; set; } = new();
+
         [Range(0, int.MaxValue, ErrorMessage = "TtlIdleSeconds must be a non-negative value")]
         public int TtlIdleSeconds { get; set; } = 0;
 

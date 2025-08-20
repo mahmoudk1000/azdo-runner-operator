@@ -6,7 +6,7 @@ namespace AzDORunner.Services;
 
 public interface IKubernetesPodService
 {
-    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false);
+    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null);
     Task<List<V1Pod>> GetActivePodsAsync(V1AzDORunnerEntity runnerPool);
     Task<List<V1Pod>> GetAllRunnerPodsAsync(V1AzDORunnerEntity runnerPool);
     Task<List<V1Pod>> GetMinAgentPodsAsync(V1AzDORunnerEntity runnerPool);
@@ -25,10 +25,14 @@ public class KubernetesPodService : IKubernetesPodService
         _logger = logger;
     }
 
-    public Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false)
+    public Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null)
     {
         var podName = $"{runnerPool.Metadata.Name}-agent-{Guid.NewGuid().ToString("N")[..8]}";
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
+
+        // Determine which image to use based on capability requirements
+        var imageToUse = DetermineImageForCapability(runnerPool, requiredCapability);
+        var capabilityLabel = requiredCapability ?? "base";
 
         var pod = new V1Pod
         {
@@ -44,7 +48,9 @@ public class KubernetesPodService : IKubernetesPodService
                     ["runner-pool"] = runnerPool.Metadata.Name,
                     ["managed-by"] = "azdo-runner-operator",
                     ["atos"] = "devops",
-                    ["min-agent"] = isMinAgent.ToString().ToLower()
+                    ["min-agent"] = isMinAgent.ToString().ToLower(),
+                    ["capability"] = capabilityLabel,
+                    ["capability-aware"] = runnerPool.Spec.CapabilityAware.ToString().ToLower()
                 },
                 OwnerReferences = new List<V1OwnerReference>
                 {
@@ -68,7 +74,7 @@ public class KubernetesPodService : IKubernetesPodService
                     new()
                     {
                         Name = "agent",
-                        Image = runnerPool.Spec.Image,
+                        Image = imageToUse,
                         // Min agents never use --once, regular agents use --once only when TtlIdleSeconds is 0
                         Args = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? new List<string> { "--once" } : null,
                         Env = new List<V1EnvVar>
@@ -99,6 +105,11 @@ public class KubernetesPodService : IKubernetesPodService
                             {
                                 Name = "AZP_AGENT_NAME",
                                 Value = podName
+                            },
+                            new()
+                            {
+                                Name = "AZP_CAPABILITY",
+                                Value = capabilityLabel
                             }
                         },
                         Resources = new V1ResourceRequirements
@@ -134,8 +145,8 @@ public class KubernetesPodService : IKubernetesPodService
             var createdPod = _kubernetesClient.Create(pod);
             var agentType = isMinAgent ? "minimum" : "regular";
             var mode = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? "one-time (--once)" : "continuous";
-            _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds})",
-                agentType, podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds);
+            _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds}, Capability: {Capability}, Image: {Image})",
+                agentType, podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds, capabilityLabel, imageToUse);
             return Task.FromResult(createdPod);
         }
         catch (Exception ex)
@@ -281,5 +292,33 @@ public class KubernetesPodService : IKubernetesPodService
             _logger.LogError(ex, "Failed to delete completed pods for RunnerPool {Name}", runnerPool.Metadata.Name);
             return Task.CompletedTask;
         }
+    }
+
+    private string DetermineImageForCapability(V1AzDORunnerEntity runnerPool, string? requiredCapability)
+    {
+        // If capability-aware mode is disabled, always use the default image
+        if (!runnerPool.Spec.CapabilityAware)
+        {
+            return runnerPool.Spec.Image;
+        }
+
+        // If no specific capability is required, use the default image
+        if (string.IsNullOrEmpty(requiredCapability))
+        {
+            return runnerPool.Spec.Image;
+        }
+
+        // Check if we have a specific image for the required capability
+        if (runnerPool.Spec.CapabilityImages.TryGetValue(requiredCapability, out var capabilityImage))
+        {
+            _logger.LogInformation("Using capability-specific image {Image} for capability {Capability}",
+                capabilityImage, requiredCapability);
+            return capabilityImage;
+        }
+
+        // Fallback to default image if no specific capability image is configured
+        _logger.LogWarning("No specific image configured for capability {Capability}, using default image {Image}",
+            requiredCapability, runnerPool.Spec.Image);
+        return runnerPool.Spec.Image;
     }
 }
