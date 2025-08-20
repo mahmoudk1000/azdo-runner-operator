@@ -127,6 +127,9 @@ public class AzureDevOpsPollingService : BackgroundService
         // 2. Ensure minimum agents are running
         await EnsureMinimumAgentsAsync(entity, pat);
 
+        // 2.5. Ensure maximum agents limit is respected
+        await EnsureMaximumAgentsLimitAsync(entity, pat);
+
         // 3. Clean up idle agents based on TtlIdleSeconds configuration
         if (entity.Spec.TtlIdleSeconds == 0)
         {
@@ -364,35 +367,213 @@ public class AzureDevOpsPollingService : BackgroundService
 
     private async Task EnsureMinimumAgentsAsync(V1RunnerPoolEntity entity, string pat)
     {
-        if (entity.Spec.MinAgents <= 0)
-        {
-            return; // No minimum agents required
-        }
-
         try
         {
             var currentMinAgents = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
-            var neededMinAgents = entity.Spec.MinAgents - currentMinAgents.Count;
+            var currentMinAgentCount = currentMinAgents.Count;
+            var requiredMinAgents = Math.Max(0, entity.Spec.MinAgents); // Ensure non-negative
+
+            // Ensure MinAgents doesn't exceed MaxAgents
+            var maxAgents = Math.Max(0, entity.Spec.MaxAgents);
+            if (requiredMinAgents > maxAgents)
+            {
+                _logger.LogWarning("MinAgents ({MinAgents}) exceeds MaxAgents ({MaxAgents}) for pool '{PoolName}'. Adjusting MinAgents to MaxAgents.",
+                    requiredMinAgents, maxAgents, entity.Metadata.Name);
+                requiredMinAgents = maxAgents;
+            }
+
+            if (requiredMinAgents == 0)
+            {
+                // If MinAgents is 0, remove all existing minimum agents
+                if (currentMinAgentCount > 0)
+                {
+                    _logger.LogInformation("Removing all {CurrentMinAgents} minimum agents for pool '{PoolName}' (required: {MinAgents})",
+                        currentMinAgentCount, entity.Metadata.Name, requiredMinAgents);
+
+                    await RemoveExcessMinimumAgentsAsync(entity, pat, currentMinAgents, currentMinAgentCount);
+                }
+                return;
+            }
+
+            var neededMinAgents = requiredMinAgents - currentMinAgentCount;
 
             if (neededMinAgents > 0)
             {
+                // Scale up: Create additional minimum agents
                 _logger.LogInformation("Creating {NeededMinAgents} minimum agents for pool '{PoolName}' (current: {CurrentMinAgents}, required: {MinAgents})",
-                    neededMinAgents, entity.Metadata.Name, currentMinAgents.Count, entity.Spec.MinAgents);
+                    neededMinAgents, entity.Metadata.Name, currentMinAgentCount, requiredMinAgents);
 
                 for (int i = 0; i < neededMinAgents; i++)
                 {
                     await _kubernetesPodService.CreateAgentPodAsync(entity, pat, isMinAgent: true);
                 }
             }
+            else if (neededMinAgents < 0)
+            {
+                // Scale down: Remove excess minimum agents
+                var excessMinAgents = Math.Abs(neededMinAgents);
+                _logger.LogInformation("Removing {ExcessMinAgents} excess minimum agents for pool '{PoolName}' (current: {CurrentMinAgents}, required: {MinAgents})",
+                    excessMinAgents, entity.Metadata.Name, currentMinAgentCount, requiredMinAgents);
+
+                await RemoveExcessMinimumAgentsAsync(entity, pat, currentMinAgents, excessMinAgents);
+            }
             else
             {
                 _logger.LogDebug("Minimum agent requirement satisfied for pool '{PoolName}' ({CurrentMinAgents}/{MinAgents})",
-                    entity.Metadata.Name, currentMinAgents.Count, entity.Spec.MinAgents);
+                    entity.Metadata.Name, currentMinAgentCount, requiredMinAgents);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to ensure minimum agents for pool '{PoolName}'", entity.Metadata.Name);
+        }
+    }
+
+    private async Task RemoveExcessMinimumAgentsAsync(V1RunnerPoolEntity entity, string pat, List<V1Pod> currentMinAgents, int countToRemove)
+    {
+        try
+        {
+            // Get Azure agents to find corresponding agents to unregister
+            var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
+            // Sort minimum agents by creation time (oldest first) to ensure stable removal
+            var agentsToRemove = currentMinAgents
+                .OrderBy(pod => pod.Metadata.CreationTimestamp)
+                .Take(countToRemove)
+                .ToList();
+
+            foreach (var podToRemove in agentsToRemove)
+            {
+                try
+                {
+                    // Find corresponding Azure DevOps agent and unregister it
+                    var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
+                    if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
+                    {
+                        _logger.LogInformation("Unregistering excess minimum agent '{AgentName}' from Azure DevOps", correspondingAgent.Name);
+                        await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
+                    }
+
+                    // Delete the pod
+                    await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default");
+
+                    _logger.LogInformation("Removed excess minimum agent pod '{PodName}' for pool '{PoolName}'",
+                        podToRemove.Metadata.Name, entity.Metadata.Name);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to remove excess minimum agent pod '{PodName}' for pool '{PoolName}'",
+                        podToRemove.Metadata.Name, entity.Metadata.Name);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to remove excess minimum agents for pool '{PoolName}'", entity.Metadata.Name);
+        }
+    }
+
+    private async Task EnsureMaximumAgentsLimitAsync(V1RunnerPoolEntity entity, string pat)
+    {
+        try
+        {
+            var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
+            var activePods = allPods.Where(pod =>
+                pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending").ToList();
+
+            var currentActiveCount = activePods.Count;
+            var maxAgents = Math.Max(0, entity.Spec.MaxAgents); // Ensure non-negative
+
+            if (currentActiveCount <= maxAgents)
+            {
+                _logger.LogDebug("Agent count within maximum limit for pool '{PoolName}' ({CurrentActive}/{MaxAgents})",
+                    entity.Metadata.Name, currentActiveCount, maxAgents);
+                return;
+            }
+
+            var excessAgents = currentActiveCount - maxAgents;
+            _logger.LogInformation("Removing {ExcessAgents} excess agents for pool '{PoolName}' to respect MaxAgents limit (current: {CurrentActive}, max: {MaxAgents})",
+                excessAgents, entity.Metadata.Name, currentActiveCount, maxAgents);
+
+            // Get minimum agent pods to protect them if possible
+            var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
+            var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
+
+            // Prioritize removing non-minimum agents first
+            var nonMinAgents = activePods.Where(pod => !minAgentNames.Contains(pod.Metadata.Name)).ToList();
+            var minAgents = activePods.Where(pod => minAgentNames.Contains(pod.Metadata.Name)).ToList();
+
+            // Sort by creation time (oldest first) for stable removal
+            var agentsToRemove = new List<V1Pod>();
+
+            // First, remove non-minimum agents
+            var nonMinAgentsToRemove = Math.Min(excessAgents, nonMinAgents.Count);
+            agentsToRemove.AddRange(nonMinAgents
+                .OrderBy(pod => pod.Metadata.CreationTimestamp)
+                .Take(nonMinAgentsToRemove));
+
+            // If we still need to remove more agents, remove minimum agents
+            var remainingToRemove = excessAgents - nonMinAgentsToRemove;
+            if (remainingToRemove > 0)
+            {
+                _logger.LogWarning("Need to remove {RemainingToRemove} minimum agents to respect MaxAgents limit for pool '{PoolName}'",
+                    remainingToRemove, entity.Metadata.Name);
+
+                agentsToRemove.AddRange(minAgents
+                    .OrderBy(pod => pod.Metadata.CreationTimestamp)
+                    .Take(remainingToRemove));
+            }
+
+            await RemoveExcessAgentsAsync(entity, pat, agentsToRemove);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to ensure maximum agents limit for pool '{PoolName}'", entity.Metadata.Name);
+        }
+    }
+
+    private async Task RemoveExcessAgentsAsync(V1RunnerPoolEntity entity, string pat, List<V1Pod> agentsToRemove)
+    {
+        try
+        {
+            // Get Azure agents to find corresponding agents to unregister
+            var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
+            foreach (var podToRemove in agentsToRemove)
+            {
+                try
+                {
+                    // Find corresponding Azure DevOps agent and unregister it
+                    var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
+                    if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
+                    {
+                        var isMinAgent = podToRemove.Metadata.Labels?.ContainsKey("min-agent") == true &&
+                                        podToRemove.Metadata.Labels["min-agent"] == "true";
+                        var agentType = isMinAgent ? "minimum" : "regular";
+
+                        _logger.LogInformation("Unregistering excess {AgentType} agent '{AgentName}' from Azure DevOps for MaxAgents compliance",
+                            agentType, correspondingAgent.Name);
+                        await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
+                    }
+
+                    // Delete the pod
+                    await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default");
+
+                    _logger.LogInformation("Removed excess agent pod '{PodName}' for MaxAgents compliance in pool '{PoolName}'",
+                        podToRemove.Metadata.Name, entity.Metadata.Name);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to remove excess agent pod '{PodName}' for pool '{PoolName}'",
+                        podToRemove.Metadata.Name, entity.Metadata.Name);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to remove excess agents for pool '{PoolName}'", entity.Metadata.Name);
         }
     }
 }
