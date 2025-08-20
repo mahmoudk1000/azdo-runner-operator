@@ -109,50 +109,72 @@ public class AzureDevOpsPollingService : BackgroundService
         var entity = pollInfo.Entity;
         var pat = pollInfo.Pat;
         var poolName = entity.Metadata.Name;
+        var connectionStatus = "Connected";
+        string? lastError = null;
 
         _logger.LogInformation("Polling Azure DevOps for pool '{PoolName}'", poolName);
 
-        // Get current Azure DevOps state
-        var queuedJobs = await _azureDevOpsService.GetQueuedJobsCountAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
-        var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
-        var activePods = await _kubernetesPodService.GetActivePodsAsync(entity);
-        var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
-
-        _logger.LogInformation("Pool '{PoolName}': {QueuedJobs} queued jobs, {AzureAgents} Azure agents, {ActivePods} active pods",
-            poolName, queuedJobs, azureAgents.Count, activePods.Count);
-
-        // 1. Clean up completed agents/pods
-        await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
-
-        // 2. Ensure minimum agents are running
-        await EnsureMinimumAgentsAsync(entity, pat);
-
-        // 2.5. Ensure maximum agents limit is respected
-        await EnsureMaximumAgentsLimitAsync(entity, pat);
-
-        // 3. Clean up idle agents based on TtlIdleSeconds configuration
-        if (entity.Spec.TtlIdleSeconds == 0)
+        try
         {
-            // For immediate cleanup mode (--once), only clean up when no work is queued
-            if (queuedJobs == 0)
+            // Get current Azure DevOps state
+            var queuedJobs = await _azureDevOpsService.GetQueuedJobsCountAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+            var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+            var activePods = await _kubernetesPodService.GetActivePodsAsync(entity);
+            var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
+
+            _logger.LogInformation("Pool '{PoolName}': {QueuedJobs} queued jobs, {AzureAgents} Azure agents, {ActivePods} active pods",
+                poolName, queuedJobs, azureAgents.Count, activePods.Count);
+
+            // 1. Clean up completed agents/pods
+            await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
+
+            // 2. Ensure minimum agents are running
+            await EnsureMinimumAgentsAsync(entity, pat);
+
+            // 2.5. Ensure maximum agents limit is respected
+            await EnsureMaximumAgentsLimitAsync(entity, pat);
+
+            // 3. Clean up idle agents based on TtlIdleSeconds configuration
+            if (entity.Spec.TtlIdleSeconds == 0)
             {
+                // For immediate cleanup mode (--once), only clean up when no work is queued
+                if (queuedJobs == 0)
+                {
+                    await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
+                }
+            }
+            else
+            {
+                // For continuous mode, clean up agents that have exceeded TtlIdleSeconds regardless of queue status
                 await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
             }
-        }
-        else
-        {
-            // For continuous mode, clean up agents that have exceeded TtlIdleSeconds regardless of queue status
-            await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
-        }
 
-        // 4. Scale up if needed - but consider both Azure agents AND running pods
-        if (queuedJobs > 0)
-        {
-            await ScaleUpForQueuedWorkAsync(entity, pat, queuedJobs, azureAgents, activePods.Count);
-        }
+            // 4. Scale up if needed - but consider both Azure agents AND running pods
+            if (queuedJobs > 0)
+            {
+                await ScaleUpForQueuedWorkAsync(entity, pat, queuedJobs, azureAgents, activePods.Count);
+            }
 
-        // 4. Update status
-        UpdateEntityStatus(entity, azureAgents, activePods, queuedJobs);
+            // 5. Update status with successful connection
+            UpdateEntityStatus(entity, azureAgents, activePods, queuedJobs, connectionStatus, lastError);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to poll Azure DevOps for pool '{PoolName}' - marking as disconnected", poolName);
+            connectionStatus = "Disconnected";
+            lastError = ex.Message;
+
+            // Still try to get local pod information for status update
+            try
+            {
+                var activePods = await _kubernetesPodService.GetActivePodsAsync(entity);
+                UpdateEntityStatus(entity, new List<Agent>(), activePods, 0, connectionStatus, lastError);
+            }
+            catch (Exception statusEx)
+            {
+                _logger.LogError(statusEx, "Failed to update status for disconnected pool '{PoolName}'", poolName);
+            }
+        }
     }
 
     private async Task CleanupCompletedAgentsAsync(V1RunnerPoolEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> allPods)
@@ -309,7 +331,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private void UpdateEntityStatus(V1RunnerPoolEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs)
+    private void UpdateEntityStatus(V1RunnerPoolEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Connected", string? lastError = null)
     {
         try
         {
@@ -326,25 +348,41 @@ public class AzureDevOpsPollingService : BackgroundService
                 freshEntity.Status.QueuedJobs = queuedJobs;
                 freshEntity.Status.RunningAgents = operatorManagedAgents.Count;
                 freshEntity.Status.LastPolled = DateTime.UtcNow;
-                freshEntity.Status.Active = true;
-                freshEntity.Status.ConnectionStatus = "Connected";
+                freshEntity.Status.Active = connectionStatus == "Connected";
+                freshEntity.Status.ConnectionStatus = connectionStatus;
+                freshEntity.Status.LastError = lastError;
                 freshEntity.Status.OrganizationName = _azureDevOpsService.ExtractOrganizationName(freshEntity.Spec.AzDoUrl);
                 freshEntity.Status.AgentsSummary = $"{operatorManagedAgents.Count}/{freshEntity.Spec.MaxAgents}";
                 freshEntity.Status.Agents = operatorManagedAgents; // Only show operator-managed agents
 
                 freshEntity.Status.Conditions.Clear();
-                freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+
+                if (connectionStatus == "Connected")
                 {
-                    Type = "Ready",
-                    Status = "True",
-                    Reason = "Reconciled",
-                    Message = $"Pool has {operatorManagedAgents.Count} operator-managed agents ({availableAgents} available, {offlineAgents} offline), {activePods} active pods, {queuedJobs} queued jobs",
-                    LastTransitionTime = DateTime.UtcNow
-                });
+                    freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+                    {
+                        Type = "Ready",
+                        Status = "True",
+                        Reason = "Reconciled",
+                        Message = $"Pool has {operatorManagedAgents.Count} operator-managed agents ({availableAgents} available, {offlineAgents} offline), {activePods} active pods, {queuedJobs} queued jobs",
+                        LastTransitionTime = DateTime.UtcNow
+                    });
+                }
+                else
+                {
+                    freshEntity.Status.Conditions.Add(new V1RunnerPoolEntity.StatusCondition
+                    {
+                        Type = "Error",
+                        Status = "True",
+                        Reason = "Disconnected",
+                        Message = $"Failed to connect to Azure DevOps: {lastError ?? "Unknown error"}",
+                        LastTransitionTime = DateTime.UtcNow
+                    });
+                }
 
                 _kubernetesClient.UpdateStatus(freshEntity);
-                _logger.LogDebug("Updated RunnerPool status: {AgentCount} agents, {QueuedJobs} queued jobs, {ActivePods} active pods",
-                    azureAgents.Count, queuedJobs, activePods);
+                _logger.LogDebug("Updated RunnerPool status: {ConnectionStatus}, {AgentCount} agents, {QueuedJobs} queued jobs, {ActivePods} active pods",
+                    connectionStatus, azureAgents.Count, queuedJobs, activePods);
             }
         }
         catch (Exception ex)
