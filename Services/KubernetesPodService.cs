@@ -1,5 +1,4 @@
 ﻿using k8s.Models;
-using Microsoft.Extensions.Logging;
 using AzDORunner.Entities;
 using KubeOps.KubernetesClient;
 

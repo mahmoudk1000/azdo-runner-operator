@@ -1,12 +1,12 @@
 ﻿using System.Text.Json;
 using System.Text;
-using Microsoft.Extensions.Logging;
 using AzDORunner.Model.Domain;
 
 namespace AzDORunner.Services;
 
 public interface IAzureDevOpsService
 {
+    Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat);
     Task<bool> TestConnectionAsync(string azDoUrl, string pat);
     Task<int> GetQueuedJobsCountAsync(string azDoUrl, string poolName, string pat);
     Task<List<string>> GetAvailablePoolNamesAsync(string azDoUrl, string pat);
@@ -17,6 +17,47 @@ public interface IAzureDevOpsService
 
 public class AzureDevOpsService : IAzureDevOpsService
 {
+    public async Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat)
+    {
+        try
+        {
+            _logger.LogDebug("Getting job requests for pool '{PoolName}' from {AzDoUrl}", poolName, azDoUrl);
+
+            var poolId = await GetPoolIdAsync(azDoUrl, poolName, pat);
+            if (poolId == null)
+            {
+                _logger.LogWarning("Pool '{PoolName}' not found for job requests", poolName);
+                return new List<JobRequest>();
+            }
+
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                $"{azDoUrl.TrimEnd('/')}/_apis/distributedtask/pools/{poolId}/jobrequests?api-version=7.0");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}")));
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Failed to get job requests for pool '{PoolName}': {StatusCode}", poolName, response.StatusCode);
+                return new List<JobRequest>();
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            var jobRequests = JsonSerializer.Deserialize<JobRequestsResponse>(content, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            var allJobs = jobRequests?.Value ?? new List<JobRequest>();
+            _logger.LogInformation("Pool '{PoolName}': {JobCount} total job requests", poolName, allJobs.Count);
+            return allJobs;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get job requests for pool '{PoolName}' from {AzDoUrl}", poolName, azDoUrl);
+            return new List<JobRequest>();
+        }
+    }
     private readonly HttpClient _httpClient;
     private readonly ILogger<AzureDevOpsService> _logger;
 

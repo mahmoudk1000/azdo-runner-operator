@@ -1,7 +1,6 @@
 ﻿using AzDORunner.Entities;
 using AzDORunner.Services;
 using KubeOps.Abstractions.Finalizer;
-using Microsoft.Extensions.Logging;
 
 namespace AzDORunner.Finalizer;
 
