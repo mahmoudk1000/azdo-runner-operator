@@ -5,9 +5,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using KubeOps.KubernetesClient;
 
-var builder = Host.CreateApplicationBuilder(args);
+var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container
 // KubeOps automatically registers IKubernetesClient when adding the operator
 builder.Services
     .AddKubernetesOperator()
@@ -19,9 +18,10 @@ builder.Services
         // c.DeleteOnShutdown = true;
     })
 #endif
-    .RegisterComponents();
+    .RegisterComponents(); // This automatically discovers and registers webhooks
 
-// Register custom services
+// Add standard ASP.NET Core MVC services
+builder.Services.AddControllers();
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
@@ -39,7 +39,13 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureD
 builder.Services.AddHealthChecks()
     .AddCheck<OperatorHealthCheck>("operator");
 
-var host = builder.Build();
+var app = builder.Build();
 
-// Run
-await host.RunAsync();
+// Enable ASP.NET Core routing
+app.UseRouting();
+
+// Map controllers (including webhook endpoints)
+app.MapControllers();
+
+// Run the operator and web host
+await app.RunAsync();
