@@ -7,6 +7,7 @@ namespace AzDORunner.Services;
 public interface IAzureDevOpsService
 {
     Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat);
+    Task<List<JobRequest>> GetQueuedJobsWithCapabilitiesAsync(string azDoUrl, string poolName, string pat);
     Task<bool> TestConnectionAsync(string azDoUrl, string pat);
     Task<int> GetQueuedJobsCountAsync(string azDoUrl, string poolName, string pat);
     Task<List<string>> GetAvailablePoolNamesAsync(string azDoUrl, string pat);
@@ -58,6 +59,82 @@ public class AzureDevOpsService : IAzureDevOpsService
             return new List<JobRequest>();
         }
     }
+
+    public async Task<List<JobRequest>> GetQueuedJobsWithCapabilitiesAsync(string azDoUrl, string poolName, string pat)
+    {
+        try
+        {
+            _logger.LogDebug("Getting queued jobs with capabilities for pool '{PoolName}' from {AzDoUrl}", poolName, azDoUrl);
+
+            var poolId = await GetPoolIdAsync(azDoUrl, poolName, pat);
+            if (poolId == null)
+            {
+                _logger.LogWarning("Pool '{PoolName}' not found for job requests with capabilities", poolName);
+                return new List<JobRequest>();
+            }
+
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                $"{azDoUrl.TrimEnd('/')}/_apis/distributedtask/pools/{poolId}/jobrequests?api-version=7.0&$expand=jobs");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}")));
+
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Failed to get job requests with capabilities for pool '{PoolName}': {StatusCode}", poolName, response.StatusCode);
+                return new List<JobRequest>();
+            }
+
+            var content = await response.Content.ReadAsStringAsync();
+            var jobRequests = JsonSerializer.Deserialize<JobRequestsResponse>(content, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            });
+
+            var queuedJobs = jobRequests?.Value?.Where(j => j.Result == null).ToList() ?? new List<JobRequest>();
+
+            // Parse demands/capabilities from each job
+            foreach (var job in queuedJobs)
+            {
+                job.RequiredCapability = ExtractRequiredCapabilityFromDemands(job.Demands);
+            }
+
+            _logger.LogInformation("Pool '{PoolName}': {JobCount} queued jobs with capabilities parsed", poolName, queuedJobs.Count);
+            return queuedJobs;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get queued jobs with capabilities for pool '{PoolName}' from {AzDoUrl}", poolName, azDoUrl);
+            return new List<JobRequest>();
+        }
+    }
+
+    private string? ExtractRequiredCapabilityFromDemands(List<string> demands)
+    {
+        if (demands == null || !demands.Any())
+            return null;
+
+        // Look for common capability patterns in demands
+        foreach (var demand in demands)
+        {
+            var lowerDemand = demand.ToLowerInvariant();
+
+            // Check for runtime-specific demands
+            if (lowerDemand.Contains("java") || lowerDemand.Contains("jdk") || lowerDemand.Contains("maven"))
+                return "java";
+
+            if (lowerDemand.Contains("dotnet") || lowerDemand.Contains(".net") || lowerDemand.Contains("nuget"))
+                return "dotnet";
+
+            if (lowerDemand.Contains("node") || lowerDemand.Contains("npm") || lowerDemand.Contains("javascript"))
+                return "nodejs";
+
+            // Add more capability patterns as needed
+        }
+
+        return null; // No specific capability detected, use base image
+    }
+
     private readonly HttpClient _httpClient;
     private readonly ILogger<AzureDevOpsService> _logger;
 

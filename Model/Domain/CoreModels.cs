@@ -38,5 +38,16 @@ namespace AzDORunner.Model.Domain
         public string? Result { get; set; }
 
         public DateTime QueueTime { get; set; }
+
+        public List<string> Demands { get; set; } = new();
+
+        public string? RequiredCapability { get; set; }
+    }
+
+    public class AgentCapability
+    {
+        public string Name { get; set; } = string.Empty;
+        public string ImageName { get; set; } = string.Empty;
+        public string Runtime { get; set; } = string.Empty;
     }
 }
