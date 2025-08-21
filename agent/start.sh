@@ -11,28 +11,8 @@ else
   echo "Starting Azure DevOps Agent (Continuous Mode)"
 fi
 
-# Get capability info from environment or runtime type
 CAPABILITY=${AZP_CAPABILITY:-${RUNTIME_TYPE:-"base"}}
 echo "Agent Capability: $CAPABILITY"
-
-if [ -z "$AZP_URL" ]; then
-  echo "error: missing AZP_URL environment variable"
-  exit 1
-fi
-
-if [ -z "$AZP_TOKEN" ]; then
-  echo "error: missing AZP_TOKEN environment variable"
-  exit 1
-fi
-
-if [ -z "$AZP_POOL" ]; then
-  echo "error: missing AZP_POOL environment variable"
-  exit 1
-fi
-
-if [ -z "$AZP_AGENT_NAME" ]; then
-  AZP_AGENT_NAME=$(hostname)
-fi
 
 echo "Agent Configuration:"
 echo "   Agent Name: $AZP_AGENT_NAME"
@@ -42,14 +22,13 @@ echo "   Capability: $CAPABILITY"
 echo "   Runtime Type: ${RUNTIME_TYPE:-base}"
 echo "   Mode: $RUN_MODE"
 
-# Function to add capabilities from file
 add_capabilities_from_file() {
   if [ -f "/azp/capabilities.txt" ]; then
-    echo "Adding capabilities from capabilities.txt:"
+    echo "Setting environment variables for capabilities from capabilities.txt:"
     while IFS='=' read -r cap_name cap_value; do
       if [ -n "$cap_name" ] && [ -n "$cap_value" ]; then
-        AGENT_CONFIG_ARGS+=(--addcapability "$cap_name" "$cap_value")
-        echo "   $cap_name=$cap_value"
+        export "$cap_name"="$cap_value"
+        echo "   Set environment variable: $cap_name=$cap_value"
       fi
     done < /azp/capabilities.txt
   fi
@@ -57,7 +36,6 @@ add_capabilities_from_file() {
 
 echo "Configuring Azure Pipelines agent..."
 
-# Build agent configuration with capability labels
 AGENT_CONFIG_ARGS=(
   --unattended
   --agent "$AZP_AGENT_NAME"
@@ -70,23 +48,13 @@ AGENT_CONFIG_ARGS=(
   --acceptTeeEula
 )
 
-# Add primary capability if it's not 'base'
 if [ "$CAPABILITY" != "base" ]; then
-  AGENT_CONFIG_ARGS+=(--addcapability "$CAPABILITY" "true")
-  echo "   Adding primary capability: $CAPABILITY=true"
+  export "$CAPABILITY"="true"
+  echo "   Set environment variable: $CAPABILITY=true"
 fi
 
-# Add runtime-specific capabilities
 add_capabilities_from_file
 
-# Add general capabilities
-AGENT_CONFIG_ARGS+=(--addcapability "capability-aware" "true")
-AGENT_CONFIG_ARGS+=(--addcapability "azdo-runner-operator" "true")
-
-echo "   Adding capability: capability-aware=true"
-echo "   Adding capability: azdo-runner-operator=true"
-
-# Configure the agent
 echo "Running agent configuration..."
 if ./config.sh "${AGENT_CONFIG_ARGS[@]}"; then
     echo "Agent configured successfully"
@@ -97,13 +65,6 @@ fi
 
 echo "Agent version: $(./bin/Agent.Listener --version 2>/dev/null || echo 'unknown')"
 
-# Show registered capabilities for debugging
-echo "Registered capabilities:"
-if [ -f ".agent" ]; then
-  grep -i "usercapabilities" .agent || echo "No user capabilities found"
-fi
-
-# Run agent based on mode
 if [ "$RUN_MODE" = "once" ]; then
   echo "Running agent in one-time mode (--once)"
   ./run-docker.sh --once
