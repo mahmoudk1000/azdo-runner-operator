@@ -82,6 +82,16 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
             }
         }
 
+        // Validate ImagePullPolicy
+        if (!string.IsNullOrWhiteSpace(entity.Spec.ImagePullPolicy))
+        {
+            var validImagePullPolicies = new[] { "Always", "IfNotPresent", "Never" };
+            if (!validImagePullPolicies.Contains(entity.Spec.ImagePullPolicy))
+            {
+                validationErrors.Add($"ImagePullPolicy must be one of: {string.Join(", ", validImagePullPolicies)}");
+            }
+        }
+
         if (validationErrors.Any())
         {
             var errorMessage = string.Join("; ", validationErrors);

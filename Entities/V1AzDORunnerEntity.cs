@@ -30,6 +30,8 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         [DataAnnotationsRequired]
         public string Image { get; set; } = string.Empty;
 
+        public string ImagePullPolicy { get; set; } = "IfNotPresent";
+
         public bool CapabilityAware { get; set; } = false;
 
         public Dictionary<string, string> CapabilityImages { get; set; } = new();
@@ -47,6 +49,14 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
+            var validImagePullPolicies = new[] { "Always", "IfNotPresent", "Never" };
+            if (!string.IsNullOrEmpty(ImagePullPolicy) && !validImagePullPolicies.Contains(ImagePullPolicy))
+            {
+                yield return new ValidationResult(
+                    $"ImagePullPolicy must be one of: {string.Join(", ", validImagePullPolicies)}",
+                    new[] { nameof(ImagePullPolicy) });
+            }
+
             if (PollIntervalSeconds < 5)
             {
                 yield return new ValidationResult(

@@ -75,6 +75,7 @@ public class KubernetesPodService : IKubernetesPodService
                     {
                         Name = "agent",
                         Image = imageToUse,
+                        ImagePullPolicy = runnerPool.Spec.ImagePullPolicy,
                         // Min agents never use --once, regular agents use --once only when TtlIdleSeconds is 0
                         Args = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? new List<string> { "--once" } : null,
                         Env = new List<V1EnvVar>
@@ -145,8 +146,8 @@ public class KubernetesPodService : IKubernetesPodService
             var createdPod = _kubernetesClient.Create(pod);
             var agentType = isMinAgent ? "minimum" : "regular";
             var mode = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? "one-time (--once)" : "continuous";
-            _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds}, Capability: {Capability}, Image: {Image})",
-                agentType, podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds, capabilityLabel, imageToUse);
+            _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds}, Capability: {Capability}, Image: {Image}, ImagePullPolicy: {ImagePullPolicy})",
+                agentType, podName, namespaceName, mode, runnerPool.Spec.TtlIdleSeconds, capabilityLabel, imageToUse, runnerPool.Spec.ImagePullPolicy);
             return Task.FromResult(createdPod);
         }
         catch (Exception ex)
