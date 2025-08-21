@@ -1,8 +1,5 @@
 using KubeOps.Operator;
-using Microsoft.Extensions.DependencyInjection;
 using AzDORunner.Services;
-using Microsoft.Extensions.Hosting;
-using Microsoft.Extensions.Logging;
 using KubeOps.KubernetesClient;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -10,20 +7,18 @@ var builder = WebApplication.CreateBuilder(args);
 // KubeOps automatically registers IKubernetesClient when adding the operator
 builder.Services
     .AddKubernetesOperator()
-#if DEBUG
     .AddCrdInstaller(c =>
     {
-        // Careful, this can be very destructive.
-        // c.OverwriteExisting = true;
-        // c.DeleteOnShutdown = true;
+        c.OverwriteExisting = true;
+        c.DeleteOnShutdown = false;
     })
-#endif
-    .RegisterComponents(); // This automatically discovers and registers webhooks
+    .RegisterComponents();
 
 // Add standard ASP.NET Core MVC services
 builder.Services.AddControllers();
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
+
 builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
 {
     var pollingService = new AzureDevOpsPollingService(
