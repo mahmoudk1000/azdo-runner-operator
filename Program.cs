@@ -9,7 +9,7 @@ builder.Services
     .AddKubernetesOperator()
     .AddCrdInstaller(c =>
     {
-        c.OverwriteExisting = true;
+        c.OverwriteExisting = false;
         c.DeleteOnShutdown = false;
     })
     .RegisterComponents();
