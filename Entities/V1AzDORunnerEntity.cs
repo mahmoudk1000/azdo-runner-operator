@@ -7,7 +7,7 @@ using System.ComponentModel.DataAnnotations;
 
 namespace AzDORunner.Entities;
 
-[KubernetesEntity(Group = "devops.atos.net", ApiVersion = "v1alpha", Kind = "RunnerPool")]
+[KubernetesEntity(Group = "devops.opentools.mf", ApiVersion = "v1alpha", Kind = "RunnerPool")]
 [GenericAdditionalPrinterColumn(".status.connectionStatus", "Status", "string")]
 [GenericAdditionalPrinterColumn(".spec.pool", "Pool", "string")]
 [GenericAdditionalPrinterColumn(".status.organizationName", "Organization", "string")]
