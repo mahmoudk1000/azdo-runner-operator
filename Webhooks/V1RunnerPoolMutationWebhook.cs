@@ -18,6 +18,13 @@ public class V1RunnerPoolMutationWebhook : MutationWebhook<V1AzDORunnerEntity>
             modified = true;
         }
 
+        // Set default ImagePullPolicy if not specified
+        if (string.IsNullOrWhiteSpace(entity.Spec.ImagePullPolicy))
+        {
+            entity.Spec.ImagePullPolicy = "IfNotPresent";
+            modified = true;
+        }
+
         return modified ? Modified(entity) : NoChanges();
     }
 
@@ -30,6 +37,13 @@ public class V1RunnerPoolMutationWebhook : MutationWebhook<V1AzDORunnerEntity>
         if (!newEntity.Metadata.Labels.ContainsKey("managed-by"))
         {
             newEntity.Metadata.Labels["managed-by"] = "azdo-runner-operator";
+            modified = true;
+        }
+
+        // Set default ImagePullPolicy if not specified
+        if (string.IsNullOrWhiteSpace(newEntity.Spec.ImagePullPolicy))
+        {
+            newEntity.Spec.ImagePullPolicy = "IfNotPresent";
             modified = true;
         }
 
