@@ -1,4 +1,3 @@
-# Use slim base image for smaller size
 FROM ubuntu:24.04
 
 LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
@@ -6,7 +5,6 @@ LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
 ARG VERSION=4.260.0
 ARG RUNTIME_TYPE=base
 
-# Set capability environment variable based on runtime type
 ENV AZP_CAPABILITY=${RUNTIME_TYPE}
 
 RUN apt-get update && \
@@ -20,7 +18,6 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-# Install runtime-specific tools and set appropriate capabilities
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -37,8 +34,8 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
     dotnet-runtime-8.0 \
-    && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean \
     && echo "dotnet=true" > /tmp/capabilities.txt \
     && echo ".net=true" >> /tmp/capabilities.txt \
     && echo "nuget=true" >> /tmp/capabilities.txt; \
@@ -62,15 +59,16 @@ RUN useradd -m -s /bin/bash azureuser && \
 
 RUN curl -fsSL https://download.agent.dev.azure.com/agent/${VERSION}/vsts-agent-linux-x64-${VERSION}.tar.gz | \
     tar -xz -C /azp && \
-    chown -R azureuser:azureuser /azp
+    chown -R azureuser:azureuser /azp && \
+    chmod +x /azp/*.sh /azp/bin/* /azp/externals/node/bin/* 2>/dev/null || true
 
 RUN apt-get autoremove -y && \
     rm -rf /tmp/* /var/tmp/* /usr/share/doc/* /usr/share/man/* /var/cache/debconf/*
 
 COPY start.sh /azp/start.sh
 RUN chmod +x /azp/start.sh
+RUN chmod +x /azp/*.sh
 
-# Copy capabilities file for reference
 RUN if [ -f /tmp/capabilities.txt ]; then \
     cp /tmp/capabilities.txt /azp/capabilities.txt && \
     chown azureuser:azureuser /azp/capabilities.txt; \
@@ -79,7 +77,6 @@ RUN if [ -f /tmp/capabilities.txt ]; then \
 USER azureuser
 WORKDIR /azp
 
-# Add runtime info to environment
 ENV RUNTIME_TYPE=${RUNTIME_TYPE}
 
 ENTRYPOINT ["/azp/start.sh"]
