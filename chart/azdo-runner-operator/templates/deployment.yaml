@@ -26,10 +26,10 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "azdo-runner-operator.fullname" . }}
-      {{- with .Values.podSecurityContext }}
       securityContext:
-        {{- toYaml . | nindent 8 }}
-      {{- end }}
+        runAsUser: 0
+        runAsGroup: 0
+        fsGroup: 0
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
@@ -44,9 +44,7 @@ spec:
               fieldRef:
                 fieldPath: metadata.namespace
           - name: SERVICE_NAME
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.name
+            value: {{ include "azdo-runner-operator.fullname" . }}
           - name: KESTREL__ENDPOINTS__HTTPS__URL
             value: "https://localhost:443"
           - name: CERT_DIR
