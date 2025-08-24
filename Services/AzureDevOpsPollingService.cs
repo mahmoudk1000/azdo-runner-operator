@@ -409,18 +409,18 @@ public class AzureDevOpsPollingService : BackgroundService
         }
 
         // Only spawn agents for jobs that are not already assigned to an agent
-        var jobsWithoutAgent = jobRequests.Where(j => j.Result == null && !operatorManagedAgents.Any(a => a.Id == j.AgentId)).Count();
-        var neededAgents = Math.Min(jobsWithoutAgent, entity.Spec.MaxAgents - totalAgentCount);
+        var jobsWithoutAgent = jobRequests.Where(j => j.Result == null && !operatorManagedAgents.Any(a => a.Id == j.AgentId)).ToList();
+        var neededAgents = Math.Min(jobsWithoutAgent.Count, entity.Spec.MaxAgents - totalAgentCount);
 
         if (neededAgents > 0)
         {
             _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (available capacity: {AvailableAgents} operator agents + {AvailablePods} pods = {TotalCapacity})",
-                neededAgents, jobsWithoutAgent, availableAgents, availablePods, totalAvailableCapacity);
+                neededAgents, jobsWithoutAgent.Count, availableAgents, availablePods, totalAvailableCapacity);
 
             // If capability-aware mode is enabled, get detailed job requirements
             if (entity.Spec.CapabilityAware)
             {
-                await SpawnCapabilityAwareAgents(entity, pat, neededAgents);
+                await SpawnCapabilityAwareAgents(entity, pat, jobsWithoutAgent.Take(neededAgents).ToList());
             }
             else
             {
@@ -439,62 +439,26 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task SpawnCapabilityAwareAgents(V1AzDORunnerEntity entity, string pat, int neededAgents)
+    private async Task SpawnCapabilityAwareAgents(V1AzDORunnerEntity entity, string pat, List<JobRequest> jobsToSpawn)
     {
         try
         {
-            // Get queued jobs with their capability requirements
-            var queuedJobsWithCapabilities = await _azureDevOpsService.GetQueuedJobsWithCapabilitiesAsync(
-                entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
-
-            // Group jobs by required capability
-            var jobsByCapability = queuedJobsWithCapabilities
-                .GroupBy(job => job.RequiredCapability ?? "base")
-                .ToDictionary(g => g.Key, g => g.Count());
-
-            _logger.LogInformation("Pool '{PoolName}': Capability requirements - {CapabilityBreakdown}",
-                entity.Metadata.Name, string.Join(", ", jobsByCapability.Select(kvp => $"{kvp.Key}: {kvp.Value}")));
-
-            var spawnedAgents = 0;
-
-            // Spawn agents based on capability requirements
-            foreach (var capabilityGroup in jobsByCapability.OrderByDescending(kvp => kvp.Value))
+            // For each job, spawn an agent with the required capability if configured, else spawn base agent
+            foreach (var job in jobsToSpawn)
             {
-                var capability = capabilityGroup.Key;
-                var jobsForCapability = capabilityGroup.Value;
-                var agentsToSpawn = Math.Min(jobsForCapability, neededAgents - spawnedAgents);
-
-                if (agentsToSpawn <= 0) break;
-
-                for (int i = 0; i < agentsToSpawn; i++)
+                string capability = "base";
+                if (!string.IsNullOrEmpty(job.RequiredCapability) && entity.Spec.CapabilityImages != null && entity.Spec.CapabilityImages.ContainsKey(job.RequiredCapability))
                 {
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability);
-                    spawnedAgents++;
+                    capability = job.RequiredCapability;
                 }
-
-                _logger.LogInformation("Spawned {AgentsSpawned} agents with '{Capability}' capability for {JobsForCapability} jobs",
-                    agentsToSpawn, capability, jobsForCapability);
-            }
-
-            // If we still need more agents and haven't reached the limit, spawn base agents
-            if (spawnedAgents < neededAgents)
-            {
-                var remainingAgents = neededAgents - spawnedAgents;
-                for (int i = 0; i < remainingAgents; i++)
-                {
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, "base");
-                    spawnedAgents++;
-                }
-
-                _logger.LogInformation("Spawned {RemainingAgents} additional base agents", remainingAgents);
+                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability);
+                _logger.LogInformation("Spawned agent with capability '{Capability}' for job {JobId}", capability, job.RequestId);
             }
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to spawn capability-aware agents, falling back to regular spawning");
-
-            // Fallback to regular agent spawning
-            for (int i = 0; i < neededAgents; i++)
+            foreach (var job in jobsToSpawn)
             {
                 await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
             }
