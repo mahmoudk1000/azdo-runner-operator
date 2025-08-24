@@ -391,13 +391,22 @@ public class AzureDevOpsPollingService : BackgroundService
             _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (max agents: {MaxAgents}, total agents: {TotalAgentCount})",
                 jobsToSpawn.Count, jobsWithoutAgentOrPod.Count, entity.Spec.MaxAgents, totalAgentCount);
 
-            if (entity.Spec.CapabilityAware)
+            foreach (var job in jobsToSpawn)
             {
-                await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, jobsToSpawn);
-            }
-            else
-            {
-                for (int i = 0; i < jobsToSpawn.Count; i++)
+                bool podExists = allPods.Any(pod =>
+                    pod.Metadata.Annotations != null &&
+                    pod.Metadata.Annotations.TryGetValue("jobRequestId", out var val) &&
+                    val == job.RequestId.ToString());
+                if (podExists)
+                {
+                    _logger.LogInformation("Pod already exists for jobRequestId {JobRequestId}, skipping agent spawn.", job.RequestId);
+                    continue;
+                }
+                if (entity.Spec.CapabilityAware)
+                {
+                    await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, new List<JobRequest> { job });
+                }
+                else
                 {
                     await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
                 }
