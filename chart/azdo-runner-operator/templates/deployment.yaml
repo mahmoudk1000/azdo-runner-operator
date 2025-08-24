@@ -52,9 +52,9 @@ spec:
           - name: CERT_DIR
             value: "/certs"
           - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__PATH
-            value: "/certs/webhook-ca.crt"
+            value: "/certs/tls.crt"
           - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__KEYPATH
-            value: "/certs/webhook-svc.crt"
+            value: "/certs/tls.key"
           {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 10 }}
           {{- end }}
