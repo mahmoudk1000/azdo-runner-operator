@@ -130,7 +130,7 @@ public class AzureDevOpsPollingService : BackgroundService
         var entity = pollInfo.Entity;
         var pat = pollInfo.Pat;
         var poolName = entity.Metadata.Name;
-        var connectionStatus = "Connected";
+        var connectionStatus = "Disconnected";
         string? lastError = null;
 
         _logger.LogInformation("Polling Azure DevOps for pool '{PoolName}'", poolName);
@@ -378,7 +378,10 @@ public class AzureDevOpsPollingService : BackgroundService
         var jobsWithoutAgentOrPod = jobRequests.Where(j =>
             j.Result == null &&
             !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
-            !allPods.Any(pod => pod.Metadata.Annotations != null && pod.Metadata.Annotations.ContainsKey("jobRequestId") && pod.Metadata.Annotations["jobRequestId"] == j.RequestId.ToString())
+            !allPods.Any(pod =>
+                pod.Metadata.Annotations != null &&
+                pod.Metadata.Annotations.TryGetValue("jobRequestId", out var val) &&
+                val == j.RequestId.ToString())
         ).ToList();
         var availableSlots = entity.Spec.MaxAgents - totalAgentCount;
         var jobsToSpawn = jobsWithoutAgentOrPod.Take(availableSlots).ToList();
