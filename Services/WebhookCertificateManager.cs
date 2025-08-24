@@ -1,12 +1,15 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using k8s.Models;
+using KubeOps.KubernetesClient;
+
 
 namespace AzDORunner.Services
 {
     public class WebhookCertificateManager
     {
         private readonly ILogger<WebhookCertificateManager> _logger;
+        private readonly IKubernetesClient _kubernetesClient;
         private readonly string _namespace;
         private readonly string _serviceName;
         private readonly string _validatingWebhookName;
@@ -15,9 +18,11 @@ namespace AzDORunner.Services
         private readonly int _certRenewBeforeDays = 30;
 
         public WebhookCertificateManager(
-            ILogger<WebhookCertificateManager> logger)
+            ILogger<WebhookCertificateManager> logger,
+            IKubernetesClient kubernetesClient)
         {
             _logger = logger;
+            _kubernetesClient = kubernetesClient;
             _namespace = Environment.GetEnvironmentVariable("POD_NAMESPACE") ?? throw new InvalidOperationException("POD_NAMESPACE env var is required");
             _serviceName = Environment.GetEnvironmentVariable("SERVICE_NAME") ?? throw new InvalidOperationException("SERVICE_NAME env var is required");
             _validatingWebhookName = "azdo-runner-validating-webhook";
@@ -73,7 +78,8 @@ namespace AzDORunner.Services
                 {
                     Directory.CreateDirectory(certDir);
                     File.WriteAllBytes(certPath, certBytes);
-                    File.WriteAllBytes(keyPath, keyBytes);
+                    var keyPem = System.Security.Cryptography.PemEncoding.Write("PRIVATE KEY", keyBytes);
+                    File.WriteAllText(keyPath, keyPem);
                     File.WriteAllBytes(caPath, caBytes);
                 }
                 catch (Exception ex)
@@ -184,7 +190,34 @@ namespace AzDORunner.Services
 
         private void UpsertValidatingWebhook(V1ValidatingWebhookConfiguration webhook)
         {
-            // Implement as needed or remove if not required
+            try
+            {
+                var existing = _kubernetesClient.Get<V1ValidatingWebhookConfiguration>(webhook.Metadata.Name);
+                if (existing != null)
+                {
+                    webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+                    _kubernetesClient.Update(webhook);
+                    _logger.LogInformation($"Updated ValidatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                }
+                else
+                {
+                    _kubernetesClient.Create(webhook);
+                    _logger.LogInformation($"Created ValidatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("404"))
+                {
+                    _kubernetesClient.Create(webhook);
+                    _logger.LogInformation($"Created ValidatingWebhookConfiguration '{webhook.Metadata.Name}' (IDK yet).");
+                }
+                else
+                {
+                    _logger.LogError(ex, $"Failed to upsert ValidatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                    throw;
+                }
+            }
         }
 
         private void ReconcileMutatingWebhook(byte[] caBundle)
@@ -230,7 +263,34 @@ namespace AzDORunner.Services
 
         private void UpsertMutatingWebhook(V1MutatingWebhookConfiguration webhook)
         {
-            // Implement as needed or remove if not required
+            try
+            {
+                var existing = _kubernetesClient.Get<V1MutatingWebhookConfiguration>(webhook.Metadata.Name);
+                if (existing != null)
+                {
+                    webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
+                    _kubernetesClient.Update(webhook);
+                    _logger.LogInformation($"Updated MutatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                }
+                else
+                {
+                    _kubernetesClient.Create(webhook);
+                    _logger.LogInformation($"Created MutatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                }
+            }
+            catch (Exception ex)
+            {
+                if (ex.Message.Contains("404"))
+                {
+                    _kubernetesClient.Create(webhook);
+                    _logger.LogInformation($"Created MutatingWebhookConfiguration '{webhook.Metadata.Name}' (IDK yet).");
+                }
+                else
+                {
+                    _logger.LogError(ex, $"Failed to upsert MutatingWebhookConfiguration '{webhook.Metadata.Name}'.");
+                    throw;
+                }
+            }
         }
     }
 }
