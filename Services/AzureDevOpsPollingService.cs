@@ -235,16 +235,40 @@ public class AzureDevOpsPollingService : BackgroundService
             agent.Status.ToLower() == "offline" &&
             IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
             !allPods.Any(pod => pod.Metadata.Name == agent.Name &&
-                         (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending")) &&
-            !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
+                         (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending"))
         ).ToList();
 
         foreach (var offlineAgent in operatorOfflineAgents)
         {
             try
             {
-                _logger.LogInformation("Cleaning up offline agent '{AgentName}' with no active pod", offlineAgent.Name);
-                await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, offlineAgent.Name, pat);
+                // If the agent is offline, and has a recent LastActive, and has a job assigned, treat as stuck and remove
+                bool isStuck = false;
+                var stuckJob = jobRequests.FirstOrDefault(j => j.Result == null && j.AgentId == offlineAgent.Id);
+                if (stuckJob != null && offlineAgent.LastActive != null)
+                {
+                    // Consider stuck if LastActive is within the last 10 minutes (configurable if needed)
+                    var lastActiveThreshold = DateTime.UtcNow.AddMinutes(-10);
+                    if (offlineAgent.LastActive > lastActiveThreshold)
+                    {
+                        isStuck = true;
+                    }
+                }
+                if (!isStuck && stuckJob == null)
+                {
+                    // Not stuck, not running a job, safe to remove
+                    _logger.LogInformation("Cleaning up offline agent '{AgentName}' with no active pod", offlineAgent.Name);
+                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, offlineAgent.Name, pat);
+                }
+                else if (isStuck)
+                {
+                    _logger.LogWarning("Deleting stuck offline agent '{AgentName}' with recent LastActive and assigned job (jobId={JobId})", offlineAgent.Name, stuckJob?.RequestId);
+                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, offlineAgent.Name, pat);
+                }
+                else
+                {
+                    _logger.LogInformation("Skipping offline agent '{AgentName}' because it is still assigned to a job but not considered stuck", offlineAgent.Name);
+                }
             }
             catch (Exception ex)
             {
