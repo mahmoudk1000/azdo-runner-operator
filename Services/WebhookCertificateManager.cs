@@ -131,9 +131,9 @@ namespace AzDORunner.Services
         {
             try
             {
-#pragma warning disable SYSLIB0039
+#pragma warning disable SYSLIB0057
                 using var cert = new X509Certificate2(certDer);
-#pragma warning restore SYSLIB0039
+#pragma warning restore SYSLIB0057
                 var notAfter = cert.NotAfter;
                 var now = DateTime.UtcNow;
                 return (notAfter - now).TotalDays < _certRenewBeforeDays;
