@@ -1,4 +1,4 @@
-name: Build and Push Operator Docker Image
+name: CI
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - main
     paths-ignore:
       - "agent/**"
+      - ".github/**"
   workflow_dispatch:
 
 env:
