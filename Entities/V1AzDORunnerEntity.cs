@@ -89,7 +89,7 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
 
     public class V1AzDORunnerEntityStatus
     {
-        public string ConnectionStatus { get; set; } = "Unknown";
+        public string ConnectionStatus { get; set; } = "Disconnected";
         public string OrganizationName { get; set; } = string.Empty;
         public string AgentsSummary { get; set; } = "0/0";
         public bool Active { get; set; } = false;
