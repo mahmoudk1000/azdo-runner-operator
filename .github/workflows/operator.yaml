@@ -44,7 +44,7 @@ jobs:
             type=raw,value=latest
             type=raw,value={{sha}},format=short
 
-      - name: Build and push Docker image
+      - name: Publish Image
         uses: docker/build-push-action@v5
         with:
           context: .

@@ -58,7 +58,7 @@ jobs:
             type=raw,value=latest${{ matrix.runtime.suffix }}
             type=sha,format=short,suffix=${{ matrix.runtime.suffix }}
 
-      - name: Build and push Docker image
+      - name: Publish Image
         uses: docker/build-push-action@v5
         with:
           context: ./agent
