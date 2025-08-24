@@ -17,12 +17,13 @@
     </PropertyGroup>
 
     <ItemGroup>
-      <PackageReference Include="KubeOps.Generator" Version="9.11.1">
-        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PackageReference Include="KubeOps.Generator" Version="9.11.2">
         <PrivateAssets>all</PrivateAssets>
+        <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
       </PackageReference>
-      <PackageReference Include="KubeOps.Operator" Version="9.11.1" />
-      <PackageReference Include="KubeOps.Operator.Web" Version="9.11.1" />
+      <PackageReference Include="KubeOps.Operator" Version="9.11.2" />
+      <PackageReference Include="KubeOps.Operator.Web" Version="9.11.2" />
+      <PackageReference Include="KubeOps.Templates" Version="9.11.2" />
       <PackageReference Include="KubernetesClient" Version="17.0.4" />
       <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.0.0" />
       <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
