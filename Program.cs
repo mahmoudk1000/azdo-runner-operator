@@ -1,10 +1,10 @@
+using AzDORunner;
 using KubeOps.Operator;
 using AzDORunner.Services;
 using KubeOps.KubernetesClient;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// KubeOps automatically registers IKubernetesClient when adding the operator
 builder.Services
     .AddKubernetesOperator()
     .AddCrdInstaller(c =>
@@ -14,12 +14,10 @@ builder.Services
     })
     .RegisterComponents();
 
-// Add standard ASP.NET Core MVC services
-builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
+builder.Services.AddOperatorControllers();
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 
-// Register WebhookCertificateManager and background service
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateManager>();
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateBackgroundService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzDORunner.Services.WebhookCertificateBackgroundService>());
@@ -35,17 +33,13 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
 });
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureDevOpsPollingService>());
 
-// Add health checks
 builder.Services.AddHealthChecks()
     .AddCheck<OperatorHealthCheck>("operator");
 
 var app = builder.Build();
 
-// Enable ASP.NET Core routing
 app.UseRouting();
 
-// Map controllers (including webhook endpoints)
 app.MapControllers();
 
-// Run the operator and web host
 await app.RunAsync();
