@@ -1,0 +1,6 @@
+apiVersion: v2
+name: azdo-runner-operator
+description: A Helm chart for dn-demand agent azure devops runner operator
+type: application
+version: 0.1.0
+appVersion: "0.0.1"

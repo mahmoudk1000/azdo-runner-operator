@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "azdo-runner-operator.fullname" . }}
+  labels:
+    {{- include "azdo-runner-operator.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount | default 1 }}
+  selector:
+    matchLabels:
+      {{- include "azdo-runner-operator.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      labels:
+        {{- include "azdo-runner-operator.labels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "azdo-runner-operator.fullname" . }}
+      {{- with .Values.podSecurityContext }}
+      securityContext:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+          - name: https
+            containerPort: 443
+            protocol: TCP
+          env:
+          - name: POD_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
+          - name: SERVICE_NAME
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.name
+          - name: KESTREL__ENDPOINTS__HTTPS__URL
+            value: "https://localhost:443"
+          - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__PATH
+            value: "/etc/ssl/certs/webhook-ca.crt"
+          - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__KEYPATH
+            value: "/etc/ssl/certs/webhook-svc.crt"
+          {{- with .Values.extraEnv }}
+            {{- toYaml . | nindent 10 }}
+          {{- end }}
+          {{- with .Values.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          volumeMounts:
+          - name: {{ include "azdo-runner-operator.fullname" . }}-ca
+            mountPath: /etc/ssl/certs/webhook-ca.crt
+            subPath: ca.crt
+            readOnly: true
+          - name: {{ include "azdo-runner-operator.fullname" . }}-svc
+            mountPath: /etc/ssl/certs/webhook-svc.crt
+            subPath: tls.crt
+            readOnly: true
+          {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 10 }}
+          {{- end }}
+      volumes:
+      - name: {{ include "azdo-runner-operator.fullname" . }}-ca
+        secret:
+          secretName: {{ include "azdo-runner-operator.fullname" . }}-ca
+      - name: {{ include "azdo-runner-operator.fullname" . }}-svc
+        secret:
+          secretName: {{ include "azdo-runner-operator.fullname" . }}-svc
+      {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 6 }}
+      {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
