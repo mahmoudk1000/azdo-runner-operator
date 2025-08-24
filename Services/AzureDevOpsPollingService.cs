@@ -370,80 +370,37 @@ public class AzureDevOpsPollingService : BackgroundService
         // Fetch all job requests for the pool to determine if an agent is running a job
         var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
-        // Only count operator-managed agents that are NOT running a job as available
-        var availableAgents = operatorManagedAgents.Count(a =>
-            (a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle") &&
-            !jobRequests.Any(j => j.Result == null && j.AgentId == a.Id)
-        );
-
-        // Get all pods to check for recently created ones that might be starting up
-        var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
-        var recentPods = allPods.Where(pod =>
-            pod.Metadata.CreationTimestamp.HasValue &&
-            DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2)
-        ).ToList();
-
-        // Only count pods that are not assigned to a running job as available
-        var availablePods = allPods.Count(pod =>
-            (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending") &&
-            !operatorManagedAgents.Any(a => a.Name == pod.Metadata.Name && jobRequests.Any(j => j.Result == null && j.AgentId == a.Id))
-        );
-
-        var totalAvailableCapacity = availableAgents + availablePods;
-
         // Count all operator-managed agents and pods (including offline) for max agent check
+        var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
         var totalAgentCount = operatorManagedAgents.Count + allPods.Count;
 
-        _logger.LogInformation("Pool '{PoolName}': {QueuedJobs} queued jobs, {TotalAgents} total agents ({OperatorAgents} operator-managed, {AvailableAgents} available), {ActivePods} active pods, {RecentPods} recent pods (starting up)",
-            entity.Name(), queuedJobs, agents.Count, operatorManagedAgents.Count, availableAgents, activePods, recentPods.Count);
+        // For every queued job not assigned to an agent or pod, spawn a new agent (up to MaxAgents)
+        var jobsWithoutAgentOrPod = jobRequests.Where(j =>
+            j.Result == null &&
+            !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
+            !allPods.Any(pod => pod.Metadata.Annotations != null && pod.Metadata.Annotations.ContainsKey("jobRequestId") && pod.Metadata.Annotations["jobRequestId"] == j.RequestId.ToString())
+        ).ToList();
+        var availableSlots = entity.Spec.MaxAgents - totalAgentCount;
+        var jobsToSpawn = jobsWithoutAgentOrPod.Take(availableSlots).ToList();
 
-        // If we have recent pods that are still starting up, be more conservative about spawning new ones
-        if (recentPods.Count > 0 && queuedJobs <= (totalAvailableCapacity + recentPods.Count))
+        if (jobsToSpawn.Count > 0)
         {
-            _logger.LogInformation("No new agents needed: {QueuedJobs} queued jobs, {TotalCapacity} available capacity + {RecentPods} recent pods starting up",
-                queuedJobs, totalAvailableCapacity, recentPods.Count);
-            return;
-        }
+            _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (max agents: {MaxAgents}, total agents: {TotalAgentCount})",
+                jobsToSpawn.Count, jobsWithoutAgentOrPod.Count, entity.Spec.MaxAgents, totalAgentCount);
 
-        // If there are queued jobs and no available agents, and we are below MaxAgents, spawn a new agent
-        if (queuedJobs > 0 && totalAvailableCapacity == 0 && totalAgentCount < entity.Spec.MaxAgents)
-        {
-            _logger.LogInformation("No available agents, but queued jobs exist and MaxAgents not reached. Spawning a new agent.");
-            await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
-            return;
-        }
-
-        if (queuedJobs <= totalAvailableCapacity)
-        {
-            _logger.LogInformation("No new agents needed: {QueuedJobs} queued jobs, {TotalCapacity} available capacity ({AvailableAgents} available agents + {AvailablePods} available pods)",
-                queuedJobs, totalAvailableCapacity, availableAgents, availablePods);
-            return;
-        }
-
-        // Only spawn agents for jobs that are not already assigned to an agent
-        var jobsWithoutAgent = jobRequests.Where(j => j.Result == null && !operatorManagedAgents.Any(a => a.Id == j.AgentId)).ToList();
-        var neededAgents = Math.Min(jobsWithoutAgent.Count, entity.Spec.MaxAgents - totalAgentCount);
-
-        if (neededAgents > 0)
-        {
-            _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (available capacity: {AvailableAgents} operator agents + {AvailablePods} pods = {TotalCapacity})",
-                neededAgents, jobsWithoutAgent.Count, availableAgents, availablePods, totalAvailableCapacity);
-
-            // If capability-aware mode is enabled, get detailed job requirements
             if (entity.Spec.CapabilityAware)
             {
-                await SpawnCapabilityAwareAgents(entity, pat, jobsWithoutAgent.Take(neededAgents).ToList());
+                await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, jobsToSpawn);
             }
             else
             {
-                // Default behavior - spawn regular agents
-                for (int i = 0; i < neededAgents; i++)
+                for (int i = 0; i < jobsToSpawn.Count; i++)
                 {
                     await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
                 }
             }
 
-            _logger.LogInformation("Created {NeededAgents} agent pods for pending work", neededAgents);
+            _logger.LogInformation("Created {NeededAgents} agent pods for pending work", jobsToSpawn.Count);
         }
         else
         {
@@ -451,17 +408,21 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task SpawnCapabilityAwareAgents(V1AzDORunnerEntity entity, string pat, List<JobRequest> jobsToSpawn)
+    private async Task SpawnCapabilityAwareAgentsFromJobDemands(V1AzDORunnerEntity entity, string pat, List<JobRequest> jobsToSpawn)
     {
         try
         {
-            // For each job, spawn an agent with the required capability if configured, else spawn base agent
             foreach (var job in jobsToSpawn)
             {
                 string capability = "base";
-                if (!string.IsNullOrEmpty(job.RequiredCapability) && entity.Spec.CapabilityImages != null && entity.Spec.CapabilityImages.ContainsKey(job.RequiredCapability))
+                if (job.Demands != null && entity.Spec.CapabilityImages != null)
                 {
-                    capability = job.RequiredCapability;
+                    // Use the first demand that matches a capability image
+                    var matched = job.Demands.FirstOrDefault(d => entity.Spec.CapabilityImages.ContainsKey(d));
+                    if (!string.IsNullOrEmpty(matched))
+                    {
+                        capability = matched;
+                    }
                 }
                 await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability);
                 _logger.LogInformation("Spawned agent with capability '{Capability}' for job {JobId}", capability, job.RequestId);
