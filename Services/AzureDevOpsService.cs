@@ -6,6 +6,7 @@ namespace AzDORunner.Services;
 
 public interface IAzureDevOpsService
 {
+    Task<int> GetPoolMaxParallelismAsync(string azDoUrl, string poolName, string pat);
     Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat);
     Task<List<JobRequest>> GetQueuedJobsWithCapabilitiesAsync(string azDoUrl, string poolName, string pat);
     Task<bool> TestConnectionAsync(string azDoUrl, string pat);
@@ -18,6 +19,39 @@ public interface IAzureDevOpsService
 
 public class AzureDevOpsService : IAzureDevOpsService
 {
+    public async Task<int> GetPoolMaxParallelismAsync(string azDoUrl, string poolName, string pat)
+    {
+        try
+        {
+            var poolId = await GetPoolIdAsync(azDoUrl, poolName, pat);
+            if (poolId == null)
+            {
+                _logger.LogWarning("Pool '{PoolName}' not found for maxParallelism query", poolName);
+                return 1;
+            }
+            var request = new HttpRequestMessage(HttpMethod.Get,
+                $"{azDoUrl.TrimEnd('/')}/_apis/distributedtask/pools/{poolId}?api-version=7.0");
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
+                "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}")));
+            var response = await _httpClient.SendAsync(request);
+            if (!response.IsSuccessStatusCode)
+            {
+                _logger.LogError("Failed to get pool details for '{PoolName}': {StatusCode}", poolName, response.StatusCode);
+                return 1;
+            }
+            var content = await response.Content.ReadAsStringAsync();
+            var pool = JsonSerializer.Deserialize<Pool>(content, new JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+            if (pool?.MaxParallelism != null && pool.MaxParallelism > 0)
+                return pool.MaxParallelism.Value;
+            return 1;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to get maxParallelism for pool '{PoolName}'", poolName);
+            return 1;
+        }
+    }
+    //
     public async Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat)
     {
         try

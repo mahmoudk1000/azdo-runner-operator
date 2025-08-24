@@ -27,6 +27,8 @@ namespace AzDORunner.Model.Domain
         public int Id { get; set; }
 
         public string Name { get; set; } = string.Empty;
+
+        public int? MaxParallelism { get; set; } // Nullable for backward compatibility
     }
 
     public class JobRequest

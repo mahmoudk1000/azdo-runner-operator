@@ -399,50 +399,45 @@ public class AzureDevOpsPollingService : BackgroundService
         var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
         var totalAgentCount = operatorManagedAgents.Count + allPods.Count;
 
-        // For every queued job not assigned to an agent or pod, spawn a new agent (up to MaxAgents)
-        var jobsWithoutAgentOrPod = jobRequests.Where(j =>
-            (j.Result == null || (j.Result != null && j.Result.ToLower() == "inprogress")) &&
-            !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
-            !allPods.Any(pod =>
-                pod.Metadata.Labels != null &&
-                pod.Metadata.Labels.TryGetValue("job-request-id", out var val) &&
-                val == j.RequestId.ToString())
-        ).ToList();
-        var availableSlots = entity.Spec.MaxAgents - totalAgentCount;
-        var jobsToSpawn = jobsWithoutAgentOrPod.Take(availableSlots).ToList();
+        // Dynamically determine allowed parallelism from Azure DevOps pool settings
+        int allowedParallelism = await _azureDevOpsService.GetPoolMaxParallelismAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
-        if (jobsToSpawn.Count > 0)
+        // Count running or pending pods (active agent pods)
+        int runningOrPendingPods = allPods.Count(pod => pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending");
+
+        // Only spawn new agent if we have fewer than allowed parallelism
+        if (runningOrPendingPods < allowedParallelism)
         {
-            _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (max agents: {MaxAgents}, total agents: {TotalAgentCount})",
-                jobsToSpawn.Count, jobsWithoutAgentOrPod.Count, entity.Spec.MaxAgents, totalAgentCount);
-
-            foreach (var job in jobsToSpawn)
-            {
-                bool podExists = allPods.Any(pod =>
+            // Find the first job that is pending and not assigned to an agent or pod
+            var jobToSpawn = jobRequests.FirstOrDefault(j =>
+                (j.Result == null || (j.Result != null && j.Result.ToLower() == "inprogress")) &&
+                !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
+                !allPods.Any(pod =>
                     pod.Metadata.Labels != null &&
                     pod.Metadata.Labels.TryGetValue("job-request-id", out var val) &&
-                    val == job.RequestId.ToString());
-                if (podExists)
+                    val == j.RequestId.ToString())
+            );
+            if (jobToSpawn != null)
+            {
+                var extraLabels = new Dictionary<string, string> { { "job-request-id", jobToSpawn.RequestId.ToString() } };
+                if (entity.Spec != null && entity.Spec.CapabilityAware)
                 {
-                    _logger.LogInformation("Pod already exists for job-request-id {JobRequestId}, skipping agent spawn.", job.RequestId);
-                    continue;
-                }
-                var extraLabels = new Dictionary<string, string> { { "job-request-id", job.RequestId.ToString() } };
-                if (entity.Spec.CapabilityAware)
-                {
-                    await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, new List<JobRequest> { job }, extraLabels);
+                    await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, new List<JobRequest> { jobToSpawn }, extraLabels);
                 }
                 else
                 {
                     await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, null, extraLabels);
                 }
+                _logger.LogInformation("Created 1 agent pod for pending work (parallelism limit: {AllowedParallelism})", allowedParallelism);
             }
-
-            _logger.LogInformation("Created {NeededAgents} agent pods for pending work", jobsToSpawn.Count);
+            else
+            {
+                _logger.LogInformation("No new agents needed: all queued jobs are already assigned to agents or pods are starting up.");
+            }
         }
         else
         {
-            _logger.LogInformation("No new agents needed: all queued jobs are already assigned to agents or pods are starting up.");
+            _logger.LogInformation("Parallelism limit reached ({AllowedParallelism}), not spawning additional agents.", allowedParallelism);
         }
     }
 
