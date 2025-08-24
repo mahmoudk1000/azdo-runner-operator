@@ -204,6 +204,13 @@ public class AzureDevOpsPollingService : BackgroundService
         {
             try
             {
+                // Grace period: do not delete pod if it is less than 2 minutes old
+                if (completedPod.Metadata.CreationTimestamp.HasValue &&
+                    DateTime.UtcNow - completedPod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
+                {
+                    _logger.LogInformation("Skipping deletion of pod '{PodName}' because it is in registration grace period", completedPod.Metadata.Name);
+                    continue;
+                }
                 var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == completedPod.Metadata.Name);
                 bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
                 if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name) && !agentIsBusy)
@@ -312,6 +319,13 @@ public class AzureDevOpsPollingService : BackgroundService
                 // Only remove pod if agent is not running a job
                 var pod = pods.FirstOrDefault(p => p.Metadata.Name == idleAgent.Name);
                 bool agentIsBusy = jobRequests.Any(j => j.Result == null && j.AgentId == idleAgent.Id);
+                // Grace period: do not delete pod if it is less than 2 minutes old
+                if (pod != null && pod.Metadata.CreationTimestamp.HasValue &&
+                    DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
+                {
+                    _logger.LogInformation("Skipping deletion of pod '{PodName}' (idle cleanup) because it is in registration grace period", pod.Metadata.Name);
+                    continue;
+                }
                 if (!agentIsBusy)
                 {
                     _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
@@ -793,6 +807,13 @@ public class AzureDevOpsPollingService : BackgroundService
             {
                 try
                 {
+                    // Grace period: do not delete pod if it is less than 2 minutes old
+                    if (podToRemove.Metadata.CreationTimestamp.HasValue &&
+                        DateTime.UtcNow - podToRemove.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
+                    {
+                        _logger.LogInformation("Skipping removal of minimum agent pod '{PodName}' because it is in registration grace period", podToRemove.Metadata.Name);
+                        continue;
+                    }
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
                     bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
                     if (agentIsBusy)
@@ -896,6 +917,13 @@ public class AzureDevOpsPollingService : BackgroundService
             {
                 try
                 {
+                    // Grace period: do not delete pod if it is less than 2 minutes old
+                    if (podToRemove.Metadata.CreationTimestamp.HasValue &&
+                        DateTime.UtcNow - podToRemove.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
+                    {
+                        _logger.LogInformation("Skipping removal of agent pod '{PodName}' for MaxAgents compliance because it is in registration grace period", podToRemove.Metadata.Name);
+                        continue;
+                    }
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
                     bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
                     if (agentIsBusy)
