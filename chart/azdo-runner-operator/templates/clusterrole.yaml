@@ -33,6 +33,9 @@ rules:
   verbs:
   - get
   - list
+  - create
+  - update
+  - watch
 - apiGroups:
   - ""
   resources:
@@ -70,3 +73,21 @@ rules:
   - get
   - update
   - patch
+- apiGroups:
+  - "admissionregistration.k8s.io"
+  resources:
+  - "validatingwebhookconfigurations"
+  verbs:
+  - get
+  - update
+  - patch
+  - create
+- apiGroups:
+  - "admissionregistration.k8s.io"
+  resources:
+  - "mutatingwebhookconfigurations"
+  verbs:
+  - get
+  - update
+  - patch
+  - create
