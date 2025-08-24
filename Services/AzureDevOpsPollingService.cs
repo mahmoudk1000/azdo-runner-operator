@@ -401,7 +401,7 @@ public class AzureDevOpsPollingService : BackgroundService
 
         // For every queued job not assigned to an agent or pod, spawn a new agent (up to MaxAgents)
         var jobsWithoutAgentOrPod = jobRequests.Where(j =>
-            j.Result == null &&
+            (j.Result == null || (j.Result != null && j.Result.ToLower() == "inprogress")) &&
             !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
             !allPods.Any(pod =>
                 pod.Metadata.Labels != null &&
