@@ -68,9 +68,21 @@ public class AzureDevOpsPollingService : BackgroundService
         {
             try
             {
-                _logger.LogDebug("Polling cycle - checking all registered pools");
+                var pollStart = DateTime.UtcNow;
                 await PollAllRegisteredPools();
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken); // Check every 5 seconds
+
+                int minPollInterval = 5;
+                if (!_poolsToMonitor.IsEmpty)
+                {
+                    minPollInterval = _poolsToMonitor.Values.Min(p => p.PollIntervalSeconds);
+                }
+
+                var elapsed = DateTime.UtcNow - pollStart;
+                var delay = TimeSpan.FromSeconds(minPollInterval) - elapsed;
+                if (delay > TimeSpan.Zero)
+                {
+                    await Task.Delay(delay, stoppingToken);
+                }
             }
             catch (Exception ex)
             {
