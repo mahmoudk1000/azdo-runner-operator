@@ -19,7 +19,6 @@ echo "   Agent Name: $AZP_AGENT_NAME"
 echo "   Organization URL: $AZP_URL"
 echo "   Pool: $AZP_POOL"
 echo "   Capability: $CAPABILITY"
-echo "   Runtime Type: ${RUNTIME_TYPE:-base}"
 echo "   Mode: $RUN_MODE"
 
 add_capabilities_from_file() {
@@ -67,8 +66,8 @@ echo "Agent version: $(./bin/Agent.Listener --version 2>/dev/null || echo 'unkno
 
 if [ "$RUN_MODE" = "once" ]; then
   echo "Running agent in one-time mode (--once)"
-  ./run-docker.sh --once
+  ./run.sh --once
 else
   echo "Running agent in continuous mode"
-  ./run-docker.sh
+  ./run.sh
 fi
