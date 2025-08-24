@@ -11,8 +11,7 @@ on:
   workflow_dispatch:
 
 env:
-  GHCR_REGISTRY: ghcr.io
-  DOCKERHUB_REGISTRY: docker.io
+  REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/agent
 
 jobs:
@@ -44,33 +43,15 @@ jobs:
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
-          registry: ${{ env.GHCR_REGISTRY }}
+          registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          registry: ${{ env.DOCKERHUB_REGISTRY }}
-          username: ${{ secrets.DOCKERHUB_USERNAME }}
-          password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Extract metadata for GHCR
         id: meta-ghcr
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.GHCR_REGISTRY }}/${{ env.IMAGE_NAME }}
-          tags: |
-            type=ref,event=tag,suffix=${{ matrix.runtime.suffix }}
-            type=ref,event=branch,suffix=${{ matrix.runtime.suffix }}
-            type=raw,value=latest${{ matrix.runtime.suffix }}
-            type=sha,format=short,suffix=${{ matrix.runtime.suffix }}
-
-      - name: Extract metadata for Docker Hub
-        id: meta-dockerhub
-        uses: docker/metadata-action@v5
-        with:
-          images: ${{ env.DOCKERHUB_REGISTRY }}/${{ github.repository_owner }}/azdo-runner-agent
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=ref,event=tag,suffix=${{ matrix.runtime.suffix }}
             type=ref,event=branch,suffix=${{ matrix.runtime.suffix }}
@@ -85,7 +66,5 @@ jobs:
           push: true
           build-args: |
             RUNTIME_TYPE=${{ matrix.runtime.type }}
-          tags: |
-            ${{ steps.meta-ghcr.outputs.tags }}
-            ${{ steps.meta-dockerhub.outputs.tags }}
+          tags: ${{ steps.meta-ghcr.outputs.tags }}
           labels: ${{ steps.meta-ghcr.outputs.labels }}
