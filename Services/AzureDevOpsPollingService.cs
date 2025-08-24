@@ -130,7 +130,7 @@ public class AzureDevOpsPollingService : BackgroundService
         var entity = pollInfo.Entity;
         var pat = pollInfo.Pat;
         var poolName = entity.Metadata.Name;
-        var connectionStatus = "Disconnected";
+        var connectionStatus = "Connected";
         string? lastError = null;
 
         _logger.LogInformation("Polling Azure DevOps for pool '{PoolName}'", poolName);
@@ -608,7 +608,7 @@ public class AzureDevOpsPollingService : BackgroundService
                 freshEntity.Status.QueuedJobs = queuedJobs;
                 freshEntity.Status.RunningAgents = operatorManagedAgents.Count;
                 freshEntity.Status.LastPolled = DateTime.UtcNow;
-                freshEntity.Status.Active = connectionStatus == "Connected";
+                freshEntity.Status.Active = connectionStatus == "Disconnected";
                 freshEntity.Status.ConnectionStatus = connectionStatus;
                 freshEntity.Status.LastError = lastError;
                 freshEntity.Status.OrganizationName = _azureDevOpsService.ExtractOrganizationName(freshEntity.Spec.AzDoUrl);
@@ -731,41 +731,41 @@ public class AzureDevOpsPollingService : BackgroundService
     {
         try
         {
-            // Get Azure agents to find corresponding agents to unregister
             var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
-            // Sort minimum agents by creation time (oldest first) to ensure stable removal
             var agentsToRemove = currentMinAgents
                 .OrderBy(pod => pod.Metadata.CreationTimestamp)
                 .Take(countToRemove)
                 .ToList();
 
-            // Get all job requests to check if any agent is running a job
             var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
             foreach (var podToRemove in agentsToRemove)
             {
                 try
                 {
-                    // Grace period: do not delete pod if it is less than 2 minutes old
-                    if (podToRemove.Metadata.CreationTimestamp.HasValue &&
-                        DateTime.UtcNow - podToRemove.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
-                    {
-                        _logger.LogInformation("Skipping removal of minimum agent pod '{PodName}' because it is in registration grace period", podToRemove.Metadata.Name);
-                        continue;
-                    }
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
                     bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+
                     if (agentIsBusy)
                     {
                         _logger.LogInformation("Skipping removal of minimum agent '{AgentName}' because it is running a job", podToRemove.Metadata.Name);
                         continue;
                     }
+
+                    if (podToRemove.Metadata.CreationTimestamp.HasValue &&
+                        DateTime.UtcNow - podToRemove.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(3))
+                    {
+                        _logger.LogInformation("Skipping removal of minimum agent pod '{PodName}' because it is in registration grace period", podToRemove.Metadata.Name);
+                        continue;
+                    }
+
                     if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
                     {
                         _logger.LogInformation("Unregistering excess minimum agent '{AgentName}' from Azure DevOps", correspondingAgent.Name);
                         await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
                     }
+
                     await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
                         entity.Metadata.NamespaceProperty ?? "default");
                     _logger.LogInformation("Removed excess minimum agent pod '{PodName}' for pool '{PoolName}'",
@@ -806,24 +806,19 @@ public class AzureDevOpsPollingService : BackgroundService
             _logger.LogInformation("Removing {ExcessAgents} excess agents for pool '{PoolName}' to respect MaxAgents limit (current: {CurrentActive}, max: {MaxAgents})",
                 excessAgents, entity.Metadata.Name, currentActiveCount, maxAgents);
 
-            // Get minimum agent pods to protect them if possible
             var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
             var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
 
-            // Prioritize removing non-minimum agents first
             var nonMinAgents = activePods.Where(pod => !minAgentNames.Contains(pod.Metadata.Name)).ToList();
             var minAgents = activePods.Where(pod => minAgentNames.Contains(pod.Metadata.Name)).ToList();
 
-            // Sort by creation time (oldest first) for stable removal
             var agentsToRemove = new List<V1Pod>();
 
-            // First, remove non-minimum agents
             var nonMinAgentsToRemove = Math.Min(excessAgents, nonMinAgents.Count);
             agentsToRemove.AddRange(nonMinAgents
                 .OrderBy(pod => pod.Metadata.CreationTimestamp)
                 .Take(nonMinAgentsToRemove));
 
-            // If we still need to remove more agents, remove minimum agents
             var remainingToRemove = excessAgents - nonMinAgentsToRemove;
             if (remainingToRemove > 0)
             {
