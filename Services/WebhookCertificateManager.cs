@@ -186,7 +186,7 @@ namespace AzDORunner.Services
                 {
                     new V1ValidatingWebhook
                     {
-                        Name = "v1runnerpool.kb.io",
+                        Name = "runnerpool.devops.opentools.mf",
                         ClientConfig = new Admissionregistrationv1WebhookClientConfig
                         {
                             CaBundle = caBundle,
@@ -259,7 +259,7 @@ namespace AzDORunner.Services
                 {
                     new V1MutatingWebhook
                     {
-                        Name = "v1runnerpool.kb.io",
+                        Name = "runnerpool.devops.opentools.mf",
                         ClientConfig = new Admissionregistrationv1WebhookClientConfig
                         {
                             CaBundle = caBundle,
