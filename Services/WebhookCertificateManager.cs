@@ -186,7 +186,7 @@ namespace AzDORunner.Services
                 {
                     new V1ValidatingWebhook
                     {
-                        Name = "runnerpool.devops.opentools.mf",
+                        Name = "validate.runnerpool.devops.opentools.mf.v1",
                         ClientConfig = new Admissionregistrationv1WebhookClientConfig
                         {
                             CaBundle = caBundle,
@@ -194,7 +194,7 @@ namespace AzDORunner.Services
                             {
                                 Name = _serviceName,
                                 NamespaceProperty = _namespace,
-                                Path = "/validate-v1-runnerpool"
+                                Path = "/validate/v1azdorunnerentity"
                             }
                         },
                         Rules = new List<V1RuleWithOperations>
@@ -208,7 +208,8 @@ namespace AzDORunner.Services
                             }
                         },
                         AdmissionReviewVersions = new List<string>{"v1"},
-                        SideEffects = "None"
+                        SideEffects = "None",
+                        MatchPolicy = "Exact"
                     }
                 }
             };
@@ -259,7 +260,7 @@ namespace AzDORunner.Services
                 {
                     new V1MutatingWebhook
                     {
-                        Name = "runnerpool.devops.opentools.mf",
+                        Name = "mutate.runnerpool.devops.opentools.mf.v1",
                         ClientConfig = new Admissionregistrationv1WebhookClientConfig
                         {
                             CaBundle = caBundle,
@@ -267,7 +268,7 @@ namespace AzDORunner.Services
                             {
                                 Name = _serviceName,
                                 NamespaceProperty = _namespace,
-                                Path = "/mutate-v1-runnerpool"
+                                Path = "/mutate/v1azdorunnerentity"
                             }
                         },
                         Rules = new List<V1RuleWithOperations>
@@ -281,7 +282,8 @@ namespace AzDORunner.Services
                             }
                         },
                         AdmissionReviewVersions = new List<string>{"v1"},
-                        SideEffects = "None"
+                        SideEffects = "None",
+                        MatchPolicy = "Exact"
                     }
                 }
             };
