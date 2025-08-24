@@ -46,7 +46,7 @@ spec:
           - name: SERVICE_NAME
             value: {{ include "azdo-runner-operator.fullname" . }}
           - name: KESTREL__ENDPOINTS__HTTPS__URL
-            value: "https://localhost:443"
+            value: "https://0.0.0.0:443"
           - name: CERT_DIR
             value: "/certs"
           - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__PATH
