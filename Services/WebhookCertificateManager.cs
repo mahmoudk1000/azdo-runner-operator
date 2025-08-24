@@ -203,11 +203,11 @@ namespace AzDORunner.Services
                             {
                                 Operations = new List<string>{"CREATE", "UPDATE"},
                                 ApiGroups = new List<string>{"devops.opentools.mf"},
-                                ApiVersions = new List<string>{"v1"},
+                                ApiVersions = new List<string>{"v1alpha"},
                                 Resources = new List<string>{"runnerpools"}
                             }
                         },
-                        AdmissionReviewVersions = new List<string>{"v1"},
+                        AdmissionReviewVersions = new List<string>{"v1alpha"},
                         SideEffects = "None"
                     }
                 }
@@ -276,11 +276,11 @@ namespace AzDORunner.Services
                             {
                                 Operations = new List<string>{"CREATE", "UPDATE"},
                                 ApiGroups = new List<string>{"devops.opentools.mf"},
-                                ApiVersions = new List<string>{"v1"},
+                                ApiVersions = new List<string>{"v1alpha"},
                                 Resources = new List<string>{"runnerpools"}
                             }
                         },
-                        AdmissionReviewVersions = new List<string>{"v1"},
+                        AdmissionReviewVersions = new List<string>{"v1alpha"},
                         SideEffects = "None"
                     }
                 }
