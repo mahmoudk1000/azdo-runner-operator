@@ -6,7 +6,7 @@ namespace AzDORunner.Services;
 
 public interface IKubernetesPodService
 {
-    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null);
+    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null, Dictionary<string, string>? extraLabels = null);
     Task<List<V1Pod>> GetActivePodsAsync(V1AzDORunnerEntity runnerPool);
     Task<List<V1Pod>> GetAllRunnerPodsAsync(V1AzDORunnerEntity runnerPool);
     Task<List<V1Pod>> GetMinAgentPodsAsync(V1AzDORunnerEntity runnerPool);
@@ -25,7 +25,7 @@ public class KubernetesPodService : IKubernetesPodService
         _logger = logger;
     }
 
-    public Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null)
+    public Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, bool isMinAgent = false, string? requiredCapability = null, Dictionary<string, string>? extraLabels = null)
     {
         var podName = $"{runnerPool.Metadata.Name}-agent-{Guid.NewGuid().ToString("N")[..8]}";
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
@@ -34,6 +34,23 @@ public class KubernetesPodService : IKubernetesPodService
         var imageToUse = DetermineImageForCapability(runnerPool, requiredCapability);
         var capabilityLabel = requiredCapability ?? "base";
 
+        var labels = new Dictionary<string, string>
+        {
+            ["app"] = "azdo-runner",
+            ["runner-pool"] = runnerPool.Metadata.Name,
+            ["managed-by"] = "azdo-runner-operator",
+            ["atos"] = "devops",
+            ["min-agent"] = isMinAgent.ToString().ToLower(),
+            ["capability"] = capabilityLabel,
+            ["capability-aware"] = runnerPool.Spec.CapabilityAware.ToString().ToLower()
+        };
+        if (extraLabels != null)
+        {
+            foreach (var kv in extraLabels)
+            {
+                labels[kv.Key] = kv.Value;
+            }
+        }
         var pod = new V1Pod
         {
             ApiVersion = "v1",
@@ -42,16 +59,7 @@ public class KubernetesPodService : IKubernetesPodService
             {
                 Name = podName,
                 NamespaceProperty = namespaceName,
-                Labels = new Dictionary<string, string>
-                {
-                    ["app"] = "azdo-runner",
-                    ["runner-pool"] = runnerPool.Metadata.Name,
-                    ["managed-by"] = "azdo-runner-operator",
-                    ["atos"] = "devops",
-                    ["min-agent"] = isMinAgent.ToString().ToLower(),
-                    ["capability"] = capabilityLabel,
-                    ["capability-aware"] = runnerPool.Spec.CapabilityAware.ToString().ToLower()
-                },
+                Labels = labels,
                 OwnerReferences = new List<V1OwnerReference>
                 {
                     new()
@@ -76,7 +84,6 @@ public class KubernetesPodService : IKubernetesPodService
                         Name = "agent",
                         Image = imageToUse,
                         ImagePullPolicy = runnerPool.Spec.ImagePullPolicy,
-                        // Min agents never use --once, regular agents use --once only when TtlIdleSeconds is 0
                         Args = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? new List<string> { "--once" } : null,
                         Env = new List<V1EnvVar>
                         {

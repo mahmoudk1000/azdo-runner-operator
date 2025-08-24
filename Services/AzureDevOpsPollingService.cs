@@ -379,8 +379,8 @@ public class AzureDevOpsPollingService : BackgroundService
             j.Result == null &&
             !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
             !allPods.Any(pod =>
-                pod.Metadata.Annotations != null &&
-                pod.Metadata.Annotations.TryGetValue("jobRequestId", out var val) &&
+                pod.Metadata.Labels != null &&
+                pod.Metadata.Labels.TryGetValue("job-request-id", out var val) &&
                 val == j.RequestId.ToString())
         ).ToList();
         var availableSlots = entity.Spec.MaxAgents - totalAgentCount;
@@ -394,21 +394,22 @@ public class AzureDevOpsPollingService : BackgroundService
             foreach (var job in jobsToSpawn)
             {
                 bool podExists = allPods.Any(pod =>
-                    pod.Metadata.Annotations != null &&
-                    pod.Metadata.Annotations.TryGetValue("jobRequestId", out var val) &&
+                    pod.Metadata.Labels != null &&
+                    pod.Metadata.Labels.TryGetValue("job-request-id", out var val) &&
                     val == job.RequestId.ToString());
                 if (podExists)
                 {
-                    _logger.LogInformation("Pod already exists for jobRequestId {JobRequestId}, skipping agent spawn.", job.RequestId);
+                    _logger.LogInformation("Pod already exists for job-request-id {JobRequestId}, skipping agent spawn.", job.RequestId);
                     continue;
                 }
+                var extraLabels = new Dictionary<string, string> { { "job-request-id", job.RequestId.ToString() } };
                 if (entity.Spec.CapabilityAware)
                 {
-                    await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, new List<JobRequest> { job });
+                    await SpawnCapabilityAwareAgentsFromJobDemands(entity, pat, new List<JobRequest> { job }, extraLabels);
                 }
                 else
                 {
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, null, extraLabels);
                 }
             }
 
@@ -420,7 +421,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task SpawnCapabilityAwareAgentsFromJobDemands(V1AzDORunnerEntity entity, string pat, List<JobRequest> jobsToSpawn)
+    private async Task SpawnCapabilityAwareAgentsFromJobDemands(V1AzDORunnerEntity entity, string pat, List<JobRequest> jobsToSpawn, Dictionary<string, string>? extraLabels = null)
     {
         try
         {
@@ -436,8 +437,10 @@ public class AzureDevOpsPollingService : BackgroundService
                         capability = matched;
                     }
                 }
-                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability);
-                _logger.LogInformation("Spawned agent with capability '{Capability}' for job {JobId}", capability, job.RequestId);
+                var labels = extraLabels != null ? new Dictionary<string, string>(extraLabels) : new Dictionary<string, string>();
+                labels["job-request-id"] = job.RequestId.ToString();
+                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability, labels);
+                _logger.LogInformation("Spawned agent with capability '{Capability}' for job {JobId} (labels: {Labels})", capability, job.RequestId, string.Join(",", labels.Select(kv => $"{kv.Key}={kv.Value}")));
             }
         }
         catch (Exception ex)
@@ -866,6 +869,17 @@ public class AzureDevOpsPollingService : BackgroundService
                         DateTime.UtcNow - podToRemove.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
                     {
                         _logger.LogInformation("Skipping removal of agent pod '{PodName}' for MaxAgents compliance because it is in registration grace period", podToRemove.Metadata.Name);
+                        continue;
+                    }
+                    var jobRequestId = podToRemove.Metadata.Labels != null && podToRemove.Metadata.Labels.TryGetValue("job-request-id", out var labelVal) ? labelVal : null;
+                    bool isLinkedToActiveJob = false;
+                    if (!string.IsNullOrEmpty(jobRequestId))
+                    {
+                        isLinkedToActiveJob = jobRequests.Any(j => j.RequestId.ToString() == jobRequestId && j.Result == null);
+                    }
+                    if (isLinkedToActiveJob)
+                    {
+                        _logger.LogInformation("Skipping removal of pod '{PodName}' because it is linked to an active or queued job (job-request-id: {JobRequestId})", podToRemove.Metadata.Name, jobRequestId);
                         continue;
                     }
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
