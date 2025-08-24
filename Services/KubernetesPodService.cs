@@ -39,7 +39,6 @@ public class KubernetesPodService : IKubernetesPodService
             ["app"] = "azdo-runner",
             ["runner-pool"] = runnerPool.Metadata.Name,
             ["managed-by"] = "azdo-runner-operator",
-            ["atos"] = "devops",
             ["min-agent"] = isMinAgent.ToString().ToLower(),
             ["capability"] = capabilityLabel,
             ["capability-aware"] = runnerPool.Spec.CapabilityAware.ToString().ToLower()

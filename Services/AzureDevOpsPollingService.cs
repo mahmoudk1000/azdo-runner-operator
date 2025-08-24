@@ -130,7 +130,7 @@ public class AzureDevOpsPollingService : BackgroundService
         var entity = pollInfo.Entity;
         var pat = pollInfo.Pat;
         var poolName = entity.Metadata.Name;
-        var connectionStatus = "Connected";
+        var connectionStatus = "Disconnected";
         string? lastError = null;
 
         _logger.LogInformation("Polling Azure DevOps for pool '{PoolName}'", poolName);
@@ -145,6 +145,9 @@ public class AzureDevOpsPollingService : BackgroundService
 
             _logger.LogInformation("Pool '{PoolName}': {QueuedJobs} queued jobs, {AzureAgents} Azure agents, {ActivePods} active pods",
                 poolName, queuedJobs, azureAgents.Count, activePods.Count);
+
+            // If we successfully polled everything, set status to Connected
+            connectionStatus = "Connected";
 
             // 1. Clean up completed agents/pods
             await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
@@ -216,15 +219,37 @@ public class AzureDevOpsPollingService : BackgroundService
         {
             try
             {
-                // Grace period: do not delete pod if it is less than 2 minutes old
-                if (completedPod.Metadata.CreationTimestamp.HasValue &&
-                    DateTime.UtcNow - completedPod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
-                {
-                    _logger.LogInformation("Skipping deletion of pod '{PodName}' because it is in registration grace period", completedPod.Metadata.Name);
-                    continue;
-                }
+                var podLabels = completedPod.Metadata.Labels ?? new Dictionary<string, string>();
+                podLabels.TryGetValue("job-request-id", out var jobRequestId);
                 var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == completedPod.Metadata.Name);
                 bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+
+                // If pod has a job-request-id, only delete if the job is finished (Result != null)
+                if (!string.IsNullOrEmpty(jobRequestId))
+                {
+                    var job = jobRequests.FirstOrDefault(j => j.RequestId.ToString() == jobRequestId);
+                    if (job != null && job.Result == null)
+                    {
+                        _logger.LogInformation("Skipping deletion of pod '{PodName}' because its job-request-id {JobRequestId} is still running", completedPod.Metadata.Name, jobRequestId);
+                        continue;
+                    }
+                }
+
+                // For pods without job-request-id, only delete if not busy and (if ttlIdleSeconds > 0) past idle threshold
+                if (string.IsNullOrEmpty(jobRequestId))
+                {
+                    var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
+                    if (ttlIdleSeconds > 0 && completedPod.Metadata.CreationTimestamp.HasValue)
+                    {
+                        var idleThreshold = completedPod.Metadata.CreationTimestamp.Value.AddSeconds(ttlIdleSeconds);
+                        if (DateTime.UtcNow < idleThreshold)
+                        {
+                            _logger.LogInformation("Skipping deletion of pod '{PodName}' because it is within ttlIdleSeconds grace period", completedPod.Metadata.Name);
+                            continue;
+                        }
+                    }
+                }
+
                 if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name) && !agentIsBusy)
                 {
                     _logger.LogInformation("Cleaning up agent '{AgentName}' for completed pod", correspondingAgent.Name);
@@ -603,7 +628,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private void UpdateEntityStatus(V1AzDORunnerEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Connected", string? lastError = null)
+    private void UpdateEntityStatus(V1AzDORunnerEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Disconnected", string? lastError = null)
     {
         try
         {
