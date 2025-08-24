@@ -193,6 +193,9 @@ public class AzureDevOpsPollingService : BackgroundService
 
     private async Task CleanupCompletedAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> allPods)
     {
+        // Get all job requests to check if any agent is running a job
+        var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
         var completedPods = allPods.Where(pod =>
             pod.Status?.Phase == "Succeeded" ||
             pod.Status?.Phase == "Failed").ToList();
@@ -202,15 +205,24 @@ public class AzureDevOpsPollingService : BackgroundService
             try
             {
                 var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == completedPod.Metadata.Name);
-                if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
+                bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+                if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name) && !agentIsBusy)
                 {
                     _logger.LogInformation("Cleaning up agent '{AgentName}' for completed pod", correspondingAgent.Name);
                     await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
                 }
 
-                await _kubernetesPodService.DeletePodAsync(completedPod.Metadata.Name,
-                    entity.Metadata.NamespaceProperty ?? "default");
-                _logger.LogInformation("Deleted completed pod '{PodName}'", completedPod.Metadata.Name);
+                // Only delete pod if agent is not busy
+                if (!agentIsBusy)
+                {
+                    await _kubernetesPodService.DeletePodAsync(completedPod.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default");
+                    _logger.LogInformation("Deleted completed pod '{PodName}'", completedPod.Metadata.Name);
+                }
+                else
+                {
+                    _logger.LogInformation("Skipping deletion of completed pod '{PodName}' because agent is still running a job", completedPod.Metadata.Name);
+                }
             }
             catch (Exception ex)
             {
@@ -218,12 +230,14 @@ public class AzureDevOpsPollingService : BackgroundService
             }
         }
 
-        // Clean up offline operator-managed agents without active pods
+        // Clean up offline operator-managed agents without active pods and not running jobs
         var operatorOfflineAgents = azureAgents.Where(agent =>
             agent.Status.ToLower() == "offline" &&
             IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
             !allPods.Any(pod => pod.Metadata.Name == agent.Name &&
-                         (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending"))).ToList();
+                         (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending")) &&
+            !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
+        ).ToList();
 
         foreach (var offlineAgent in operatorOfflineAgents)
         {
@@ -249,7 +263,6 @@ public class AzureDevOpsPollingService : BackgroundService
         var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
         var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
 
-
         // Fetch all job requests for the pool to determine if an agent is running a job
         var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
@@ -263,6 +276,7 @@ public class AzureDevOpsPollingService : BackgroundService
                 IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
                 !minAgentNames.Contains(agent.Name) &&
                 (agent.LastActive == null || agent.LastActive < idleThreshold) &&
+                // Do not remove if agent is running a job
                 !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
             ).ToList();
         }
@@ -271,15 +285,24 @@ public class AzureDevOpsPollingService : BackgroundService
         {
             try
             {
-                _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
-                    idleAgent.Name, ttlIdleSeconds);
-                await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, idleAgent.Name, pat);
-
+                // Only remove pod if agent is not running a job
                 var pod = pods.FirstOrDefault(p => p.Metadata.Name == idleAgent.Name);
-                if (pod != null)
+                bool agentIsBusy = jobRequests.Any(j => j.Result == null && j.AgentId == idleAgent.Id);
+                if (!agentIsBusy)
                 {
-                    await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name,
-                        entity.Metadata.NamespaceProperty ?? "default");
+                    _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
+                        idleAgent.Name, ttlIdleSeconds);
+                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, idleAgent.Name, pat);
+
+                    if (pod != null)
+                    {
+                        await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name,
+                            entity.Metadata.NamespaceProperty ?? "default");
+                    }
+                }
+                else
+                {
+                    _logger.LogInformation("Skipping cleanup of idle agent '{AgentName}' because it is running a job", idleAgent.Name);
                 }
             }
             catch (Exception ex)
@@ -294,8 +317,14 @@ public class AzureDevOpsPollingService : BackgroundService
         // Filter to only count operator-managed agents (ignore external agents like "Labby")
         var operatorManagedAgents = agents.Where(a => IsOperatorManagedAgent(a.Name, entity.Metadata.Name)).ToList();
 
-        // Only count online/idle operator-managed agents as available capacity
-        var availableAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle");
+        // Fetch all job requests for the pool to determine if an agent is running a job
+        var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
+        // Only count operator-managed agents that are NOT running a job as available
+        var availableAgents = operatorManagedAgents.Count(a =>
+            (a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle") &&
+            !jobRequests.Any(j => j.Result == null && j.AgentId == a.Id)
+        );
 
         // Get all pods to check for recently created ones that might be starting up
         var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
@@ -304,7 +333,16 @@ public class AzureDevOpsPollingService : BackgroundService
             DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2)
         ).ToList();
 
-        var totalAvailableCapacity = availableAgents + activePods;
+        // Only count pods that are not assigned to a running job as available
+        var availablePods = allPods.Count(pod =>
+            (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending") &&
+            !operatorManagedAgents.Any(a => a.Name == pod.Metadata.Name && jobRequests.Any(j => j.Result == null && j.AgentId == a.Id))
+        );
+
+        var totalAvailableCapacity = availableAgents + availablePods;
+
+        // Count all operator-managed agents and pods (including offline) for max agent check
+        var totalAgentCount = operatorManagedAgents.Count + allPods.Count;
 
         _logger.LogInformation("Pool '{PoolName}': {QueuedJobs} queued jobs, {TotalAgents} total agents ({OperatorAgents} operator-managed, {AvailableAgents} available), {ActivePods} active pods, {RecentPods} recent pods (starting up)",
             entity.Name(), queuedJobs, agents.Count, operatorManagedAgents.Count, availableAgents, activePods, recentPods.Count);
@@ -317,19 +355,29 @@ public class AzureDevOpsPollingService : BackgroundService
             return;
         }
 
-        if (queuedJobs <= totalAvailableCapacity)
+        // If there are queued jobs and no available agents, and we are below MaxAgents, spawn a new agent
+        if (queuedJobs > 0 && totalAvailableCapacity == 0 && totalAgentCount < entity.Spec.MaxAgents)
         {
-            _logger.LogInformation("No new agents needed: {QueuedJobs} queued jobs, {TotalCapacity} available capacity ({AvailableAgents} available agents + {ActivePods} active pods)",
-                queuedJobs, totalAvailableCapacity, availableAgents, activePods);
+            _logger.LogInformation("No available agents, but queued jobs exist and MaxAgents not reached. Spawning a new agent.");
+            await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
             return;
         }
 
-        var neededAgents = Math.Min(queuedJobs - totalAvailableCapacity, entity.Spec.MaxAgents - totalAvailableCapacity);
+        if (queuedJobs <= totalAvailableCapacity)
+        {
+            _logger.LogInformation("No new agents needed: {QueuedJobs} queued jobs, {TotalCapacity} available capacity ({AvailableAgents} available agents + {AvailablePods} available pods)",
+                queuedJobs, totalAvailableCapacity, availableAgents, availablePods);
+            return;
+        }
+
+        // Only spawn agents for jobs that are not already assigned to an agent
+        var jobsWithoutAgent = jobRequests.Where(j => j.Result == null && !operatorManagedAgents.Any(a => a.Id == j.AgentId)).Count();
+        var neededAgents = Math.Min(jobsWithoutAgent, entity.Spec.MaxAgents - totalAgentCount);
 
         if (neededAgents > 0)
         {
-            _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {QueuedJobs} queued jobs (available capacity: {AvailableAgents} operator agents + {ActivePods} pods = {TotalCapacity})",
-                neededAgents, queuedJobs, availableAgents, activePods, totalAvailableCapacity);
+            _logger.LogInformation("PENDING WORK DETECTED: Spawning {NeededAgents} agents for {JobsWithoutAgent} unassigned queued jobs (available capacity: {AvailableAgents} operator agents + {AvailablePods} pods = {TotalCapacity})",
+                neededAgents, jobsWithoutAgent, availableAgents, availablePods, totalAvailableCapacity);
 
             // If capability-aware mode is enabled, get detailed job requirements
             if (entity.Spec.CapabilityAware)
@@ -346,6 +394,10 @@ public class AzureDevOpsPollingService : BackgroundService
             }
 
             _logger.LogInformation("Created {NeededAgents} agent pods for pending work", neededAgents);
+        }
+        else
+        {
+            _logger.LogInformation("No new agents needed: all queued jobs are already assigned to agents or pods are starting up.");
         }
     }
 
@@ -710,22 +762,27 @@ public class AzureDevOpsPollingService : BackgroundService
                 .Take(countToRemove)
                 .ToList();
 
+            // Get all job requests to check if any agent is running a job
+            var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
             foreach (var podToRemove in agentsToRemove)
             {
                 try
                 {
-                    // Find corresponding Azure DevOps agent and unregister it
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
+                    bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+                    if (agentIsBusy)
+                    {
+                        _logger.LogInformation("Skipping removal of minimum agent '{AgentName}' because it is running a job", podToRemove.Metadata.Name);
+                        continue;
+                    }
                     if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
                     {
                         _logger.LogInformation("Unregistering excess minimum agent '{AgentName}' from Azure DevOps", correspondingAgent.Name);
                         await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
                     }
-
-                    // Delete the pod
                     await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
                         entity.Metadata.NamespaceProperty ?? "default");
-
                     _logger.LogInformation("Removed excess minimum agent pod '{PodName}' for pool '{PoolName}'",
                         podToRemove.Metadata.Name, entity.Metadata.Name);
                 }
@@ -808,12 +865,20 @@ public class AzureDevOpsPollingService : BackgroundService
             // Get Azure agents to find corresponding agents to unregister
             var azureAgents = await _azureDevOpsService.GetPoolAgentsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
+            // Get all job requests to check if any agent is running a job
+            var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
+
             foreach (var podToRemove in agentsToRemove)
             {
                 try
                 {
-                    // Find corresponding Azure DevOps agent and unregister it
                     var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == podToRemove.Metadata.Name);
+                    bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+                    if (agentIsBusy)
+                    {
+                        _logger.LogInformation("Skipping removal of agent '{AgentName}' for MaxAgents compliance because it is running a job", podToRemove.Metadata.Name);
+                        continue;
+                    }
                     if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name))
                     {
                         var isMinAgent = podToRemove.Metadata.Labels?.ContainsKey("min-agent") == true &&
@@ -824,11 +889,8 @@ public class AzureDevOpsPollingService : BackgroundService
                             agentType, correspondingAgent.Name);
                         await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
                     }
-
-                    // Delete the pod
                     await _kubernetesPodService.DeletePodAsync(podToRemove.Metadata.Name,
                         entity.Metadata.NamespaceProperty ?? "default");
-
                     _logger.LogInformation("Removed excess agent pod '{PodName}' for MaxAgents compliance in pool '{PoolName}'",
                         podToRemove.Metadata.Name, entity.Metadata.Name);
                 }
