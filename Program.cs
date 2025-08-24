@@ -1,4 +1,3 @@
-using AzDORunner;
 using KubeOps.Operator;
 using AzDORunner.Services;
 using KubeOps.KubernetesClient;
@@ -14,7 +13,7 @@ builder.Services
     })
     .RegisterComponents();
 
-builder.Services.AddOperatorControllers();
+builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 
