@@ -15,7 +15,7 @@ builder.Services
     .RegisterComponents();
 
 // Add standard ASP.NET Core MVC services
-builder.Services.AddControllers();
+builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 
