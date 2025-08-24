@@ -19,6 +19,11 @@ builder.Services.AddControllers();
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 
+// Register WebhookCertificateManager and background service
+builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateManager>();
+builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateBackgroundService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<AzDORunner.Services.WebhookCertificateBackgroundService>());
+
 builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
 {
     var pollingService = new AzureDevOpsPollingService(
