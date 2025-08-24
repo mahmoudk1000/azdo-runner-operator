@@ -16,7 +16,7 @@ env:
   IMAGE_NAME: ${{ github.repository }}
 
 jobs:
-  build-and-push:
+  ci:
     runs-on: ubuntu-latest
 
     if: github.event_name != 'pull_request'
