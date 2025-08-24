@@ -46,15 +46,22 @@ namespace AzDORunner.Services
             byte[] certBytes = Array.Empty<byte>();
             byte[] keyBytes = Array.Empty<byte>();
             byte[] caBytes = Array.Empty<byte>();
+            string certPem = string.Empty;
+            string keyPem = string.Empty;
+            string caPem = string.Empty;
 
             try
             {
                 if (File.Exists(certPath) && File.Exists(keyPath) && File.Exists(caPath))
                 {
-                    certBytes = File.ReadAllBytes(certPath);
-                    keyBytes = File.ReadAllBytes(keyPath);
-                    caBytes = File.ReadAllBytes(caPath);
-                    if (ShouldRotate(certBytes))
+                    certPem = File.ReadAllText(certPath);
+                    keyPem = File.ReadAllText(keyPath);
+                    caPem = File.ReadAllText(caPath);
+                    certBytes = System.Text.Encoding.UTF8.GetBytes(certPem);
+                    keyBytes = System.Text.Encoding.UTF8.GetBytes(keyPem);
+                    caBytes = System.Text.Encoding.UTF8.GetBytes(caPem);
+                    var certDer = ExtractDerFromPem(certPem, "CERTIFICATE");
+                    if (ShouldRotate(certDer))
                     {
                         needsNewCert = true;
                     }
@@ -73,14 +80,16 @@ namespace AzDORunner.Services
             if (needsNewCert)
             {
                 _logger.LogInformation("Generating new self-signed certificate for webhook (file-based).");
-                (certBytes, keyBytes, caBytes) = GenerateSelfSignedCert();
+                (certPem, keyPem, caPem) = GenerateSelfSignedCertPem();
+                certBytes = System.Text.Encoding.UTF8.GetBytes(certPem);
+                keyBytes = System.Text.Encoding.UTF8.GetBytes(keyPem);
+                caBytes = System.Text.Encoding.UTF8.GetBytes(caPem);
                 try
                 {
                     Directory.CreateDirectory(certDir);
-                    File.WriteAllBytes(certPath, certBytes);
-                    var keyPem = System.Security.Cryptography.PemEncoding.Write("PRIVATE KEY", keyBytes);
+                    File.WriteAllText(certPath, certPem);
                     File.WriteAllText(keyPath, keyPem);
-                    File.WriteAllBytes(caPath, caBytes);
+                    File.WriteAllText(caPath, caPem);
                 }
                 catch (Exception ex)
                 {
@@ -91,23 +100,8 @@ namespace AzDORunner.Services
             return (certBytes, keyBytes, caBytes);
         }
 
-        private bool ShouldRotate(byte[] certBytes)
-        {
-            try
-            {
-                using var cert = new X509Certificate2(certBytes);
-                var notAfter = cert.NotAfter;
-                var now = DateTime.UtcNow;
-                return (notAfter - now).TotalDays < _certRenewBeforeDays;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to parse certificate for rotation check.");
-                return true;
-            }
-        }
 
-        private (byte[] cert, byte[] key, byte[] ca) GenerateSelfSignedCert()
+        private (string certPem, string keyPem, string caPem) GenerateSelfSignedCertPem()
         {
             var sanDnsNames = GetServiceDnsNames();
             using var rsa = RSA.Create(2048);
@@ -124,21 +118,54 @@ namespace AzDORunner.Services
                 sanBuilder.AddDnsName(dns);
             req.CertificateExtensions.Add(sanBuilder.Build());
             using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(_certValidityDays));
-            var certBytes = cert.Export(X509ContentType.Cert);
+            // Export certificate and key as PEM
+            var certPem = new string(PemEncoding.Write("CERTIFICATE", cert.RawData));
             var keyBytes = rsa.ExportPkcs8PrivateKey();
-            return (cert.Export(X509ContentType.Pfx), keyBytes, certBytes);
+            var keyPem = new string(PemEncoding.Write("PRIVATE KEY", keyBytes));
+            // For CA, use the same cert (self-signed)
+            var caPem = certPem;
+            return (certPem, keyPem, caPem);
         }
 
+        private bool ShouldRotate(byte[] certDer)
+        {
+            try
+            {
+#pragma warning disable SYSLIB0039
+                using var cert = new X509Certificate2(certDer);
+#pragma warning restore SYSLIB0039
+                var notAfter = cert.NotAfter;
+                var now = DateTime.UtcNow;
+                return (notAfter - now).TotalDays < _certRenewBeforeDays;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to parse certificate for rotation check.");
+                return true;
+            }
+        }
+
+        // Helper to extract DER bytes from PEM
+        private static byte[] ExtractDerFromPem(string pem, string section)
+        {
+            var header = $"-----BEGIN {section}-----";
+            var footer = $"-----END {section}-----";
+            var start = pem.IndexOf(header) + header.Length;
+            var end = pem.IndexOf(footer, start);
+            var base64 = pem.Substring(start, end - start).Replace("\r", "").Replace("\n", "").Trim();
+            return Convert.FromBase64String(base64);
+        }
+
+        // Helper to get DNS names for SAN
         private List<string> GetServiceDnsNames()
         {
-            var names = new List<string>
+            return new List<string>
             {
                 _serviceName,
                 $"{_serviceName}.{_namespace}",
                 $"{_serviceName}.{_namespace}.svc",
                 $"{_serviceName}.{_namespace}.svc.cluster.local"
             };
-            return names;
         }
 
         private void ReconcileWebhookConfigurations(byte[] caBundle)
