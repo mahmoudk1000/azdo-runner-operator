@@ -1,7 +1,6 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using k8s.Models;
-using KubeOps.KubernetesClient;
 
 namespace AzDORunner.Services
 {
@@ -90,10 +89,7 @@ namespace AzDORunner.Services
         {
             try
             {
-#pragma warning disable SYSLIB0026
-                using var cert = new X509Certificate2();
-                cert.Import(certBytes, (string?)null, X509KeyStorageFlags.DefaultKeySet);
-#pragma warning restore SYSLIB0026
+                using var cert = new X509Certificate2(certBytes);
                 var notAfter = cert.NotAfter;
                 var now = DateTime.UtcNow;
                 return (notAfter - now).TotalDays < _certRenewBeforeDays;
