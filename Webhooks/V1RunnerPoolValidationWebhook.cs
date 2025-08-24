@@ -22,50 +22,47 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 
         // Validate required fields
         if (string.IsNullOrWhiteSpace(entity.Spec.AzDoUrl))
-            validationErrors.Add("AzDoUrl is required and cannot be empty");
+            return Fail("AzDoUrl is required and cannot be empty");
 
         if (string.IsNullOrWhiteSpace(entity.Spec.Pool))
-            validationErrors.Add("Pool is required and cannot be empty");
+            return Fail("Pool is required and cannot be empty");
 
         if (string.IsNullOrWhiteSpace(entity.Spec.PatSecretName))
-            validationErrors.Add("PatSecretName is required and cannot be empty");
+            return Fail("PatSecretName is required and cannot be empty");
 
         if (string.IsNullOrWhiteSpace(entity.Spec.Image))
-            validationErrors.Add("Image is required and cannot be empty");
+            return Fail("Image is required and cannot be empty");
 
         if (entity.Spec.TtlIdleSeconds < 0)
-            validationErrors.Add("TtlIdleSeconds must be a non-negative value");
+            return Fail("TtlIdleSeconds must be a non-negative value");
 
         if (entity.Spec.MinAgents < 0)
-            validationErrors.Add("MinAgents must be a non-negative value");
+            return Fail("MinAgents must be a non-negative value");
 
         if (entity.Spec.MaxAgents < 1)
-            validationErrors.Add("MaxAgents must be at least 1");
+            return Fail("MaxAgents must be at least 1");
 
         if (entity.Spec.MinAgents > entity.Spec.MaxAgents)
-            validationErrors.Add($"MinAgents ({entity.Spec.MinAgents}) cannot be greater than MaxAgents ({entity.Spec.MaxAgents})");
-
-        if (entity.Spec.PollIntervalSeconds < 5)
-            validationErrors.Add("PollIntervalSeconds must be at least 5 seconds");
+            return Fail($"MinAgents ({entity.Spec.MinAgents}) cannot be greater than MaxAgents ({entity.Spec.MaxAgents})");
 
         if (!string.IsNullOrWhiteSpace(entity.Spec.AzDoUrl))
         {
             if (!Uri.TryCreate(entity.Spec.AzDoUrl, UriKind.Absolute, out var uri) ||
                 (uri.Scheme != "https" && uri.Scheme != "http"))
-                validationErrors.Add("AzDoUrl must be a valid HTTP or HTTPS URL");
+                return Fail("AzDoUrl must be a valid HTTP or HTTPS URL");
         }
 
         if (!string.IsNullOrWhiteSpace(entity.Spec.Image))
         {
             if (entity.Spec.Image.Contains(" ") || entity.Spec.Image.Contains("\t"))
-                validationErrors.Add("Image cannot contain spaces or tabs");
+                return Fail("Image cannot contain spaces or tabs");
         }
 
         if (!string.IsNullOrWhiteSpace(entity.Spec.ImagePullPolicy))
         {
             var validImagePullPolicies = new[] { "Always", "IfNotPresent", "Never" };
             if (!validImagePullPolicies.Contains(entity.Spec.ImagePullPolicy))
-                validationErrors.Add($"ImagePullPolicy must be one of: {string.Join(", ", validImagePullPolicies)}");
+                return Fail($"ImagePullPolicy must be one of: {string.Join(", ", validImagePullPolicies)}");
         }
 
         if (validationErrors.Any())
