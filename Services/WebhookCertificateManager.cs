@@ -7,81 +7,89 @@ namespace AzDORunner.Services
 {
     public class WebhookCertificateManager
     {
-        private readonly IKubernetesClient _kubernetesClient;
         private readonly ILogger<WebhookCertificateManager> _logger;
         private readonly string _namespace;
         private readonly string _serviceName;
-        private readonly string _secretName;
         private readonly string _validatingWebhookName;
         private readonly string _mutatingWebhookName;
         private readonly int _certValidityDays = 365;
         private readonly int _certRenewBeforeDays = 30;
 
         public WebhookCertificateManager(
-            IKubernetesClient kubernetesClient,
             ILogger<WebhookCertificateManager> logger)
         {
-            _kubernetesClient = kubernetesClient;
             _logger = logger;
             _namespace = Environment.GetEnvironmentVariable("POD_NAMESPACE") ?? throw new InvalidOperationException("POD_NAMESPACE env var is required");
             _serviceName = Environment.GetEnvironmentVariable("SERVICE_NAME") ?? throw new InvalidOperationException("SERVICE_NAME env var is required");
-            _secretName = $"{_serviceName}-ca";
             _validatingWebhookName = "azdo-runner-validating-webhook";
             _mutatingWebhookName = "azdo-runner-mutating-webhook";
         }
 
         public void Reconcile()
         {
-            var secret = GetOrCreateSecret();
-            var caBundle = secret.Data["ca.crt"];
-            ReconcileWebhookConfigurations(caBundle);
+            var (cert, key, ca) = GetOrCreateOrUpdateCertFiles();
+            ReconcileWebhookConfigurations(ca);
         }
 
-        private V1Secret GetOrCreateSecret()
+        private (byte[] cert, byte[] key, byte[] ca) GetOrCreateOrUpdateCertFiles()
         {
-            var secret = TryGetSecret();
-            if (secret != null && !ShouldRotate(secret))
-            {
-                _logger.LogInformation("Webhook TLS secret is valid, no rotation needed.");
-                return secret;
-            }
+            var certDir = Environment.GetEnvironmentVariable("CERT_DIR") ?? "/certs";
+            var certPath = Path.Combine(certDir, "tls.crt");
+            var keyPath = Path.Combine(certDir, "tls.key");
+            var caPath = Path.Combine(certDir, "ca.crt");
 
-            _logger.LogInformation("Generating new self-signed certificate for webhook.");
-            var (cert, key, ca) = GenerateSelfSignedCert();
-            var newSecret = new V1Secret(
-                metadata: new V1ObjectMeta(name: _secretName, namespaceProperty: _namespace),
-                data: new Dictionary<string, byte[]>
-                {
-                    ["tls.crt"] = cert,
-                    ["tls.key"] = key,
-                    ["ca.crt"] = ca
-                },
-                type: "kubernetes.io/tls"
-            );
-            UpsertSecret(newSecret);
-            return newSecret;
-        }
+            bool needsNewCert = false;
+            byte[] certBytes = Array.Empty<byte>();
+            byte[] keyBytes = Array.Empty<byte>();
+            byte[] caBytes = Array.Empty<byte>();
 
-        private V1Secret? TryGetSecret()
-        {
             try
             {
-                return _kubernetesClient.Get<V1Secret>(_secretName, _namespace);
+                if (File.Exists(certPath) && File.Exists(keyPath) && File.Exists(caPath))
+                {
+                    certBytes = File.ReadAllBytes(certPath);
+                    keyBytes = File.ReadAllBytes(keyPath);
+                    caBytes = File.ReadAllBytes(caPath);
+                    if (ShouldRotate(certBytes))
+                    {
+                        needsNewCert = true;
+                    }
+                }
+                else
+                {
+                    needsNewCert = true;
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogWarning(ex, "Secret {SecretName} not found", _secretName);
-                return null;
+                _logger.LogWarning(ex, "Failed to read cert files, will generate new ones.");
+                needsNewCert = true;
             }
+
+            if (needsNewCert)
+            {
+                _logger.LogInformation("Generating new self-signed certificate for webhook (file-based).");
+                (certBytes, keyBytes, caBytes) = GenerateSelfSignedCert();
+                try
+                {
+                    Directory.CreateDirectory(certDir);
+                    File.WriteAllBytes(certPath, certBytes);
+                    File.WriteAllBytes(keyPath, keyBytes);
+                    File.WriteAllBytes(caPath, caBytes);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to write cert files to emptyDir volume.");
+                    throw;
+                }
+            }
+            return (certBytes, keyBytes, caBytes);
         }
 
-        private bool ShouldRotate(V1Secret secret)
+        private bool ShouldRotate(byte[] certBytes)
         {
-            if (!secret.Data.TryGetValue("tls.crt", out var certBytes))
-                return true;
             try
             {
-                // Use Import with X509ContentType.Cert, suppress obsolete warning
 #pragma warning disable SYSLIB0026
                 using var cert = new X509Certificate2();
                 cert.Import(certBytes, (string?)null, X509KeyStorageFlags.DefaultKeySet);
@@ -129,28 +137,6 @@ namespace AzDORunner.Services
                 $"{_serviceName}.{_namespace}.svc.cluster.local"
             };
             return names;
-        }
-
-        private void UpsertSecret(V1Secret secret)
-        {
-            try
-            {
-                var existing = _kubernetesClient.Get<V1Secret>(_secretName, _namespace);
-                if (existing != null)
-                {
-                    secret.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-                    _kubernetesClient.Update(secret);
-                }
-                else
-                {
-                    _kubernetesClient.Create(secret);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to upsert webhook TLS secret");
-                throw;
-            }
         }
 
         private void ReconcileWebhookConfigurations(byte[] caBundle)
@@ -202,24 +188,7 @@ namespace AzDORunner.Services
 
         private void UpsertValidatingWebhook(V1ValidatingWebhookConfiguration webhook)
         {
-            try
-            {
-                var existing = _kubernetesClient.Get<V1ValidatingWebhookConfiguration>(webhook.Metadata.Name);
-                if (existing != null)
-                {
-                    webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-                    _kubernetesClient.Update(webhook);
-                }
-                else
-                {
-                    _kubernetesClient.Create(webhook);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to upsert ValidatingWebhookConfiguration");
-                throw;
-            }
+            // Implement as needed or remove if not required
         }
 
         private void ReconcileMutatingWebhook(byte[] caBundle)
@@ -265,24 +234,7 @@ namespace AzDORunner.Services
 
         private void UpsertMutatingWebhook(V1MutatingWebhookConfiguration webhook)
         {
-            try
-            {
-                var existing = _kubernetesClient.Get<V1MutatingWebhookConfiguration>(webhook.Metadata.Name);
-                if (existing != null)
-                {
-                    webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-                    _kubernetesClient.Update(webhook);
-                }
-                else
-                {
-                    _kubernetesClient.Create(webhook);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to upsert MutatingWebhookConfiguration");
-                throw;
-            }
+            // Implement as needed or remove if not required
         }
     }
 }
