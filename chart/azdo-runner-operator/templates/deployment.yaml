@@ -49,10 +49,12 @@ spec:
                 fieldPath: metadata.name
           - name: KESTREL__ENDPOINTS__HTTPS__URL
             value: "https://localhost:443"
+          - name: CERT_DIR
+            value: "/certs"
           - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__PATH
-            value: "/etc/ssl/certs/webhook-ca.crt"
+            value: "/certs/webhook-ca.crt"
           - name: KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__KEYPATH
-            value: "/etc/ssl/certs/webhook-svc.crt"
+            value: "/certs/webhook-svc.crt"
           {{- with .Values.extraEnv }}
             {{- toYaml . | nindent 10 }}
           {{- end }}
@@ -61,24 +63,15 @@ spec:
             {{- toYaml . | nindent 12 }}
           {{- end }}
           volumeMounts:
-          - name: {{ include "azdo-runner-operator.fullname" . }}-ca
-            mountPath: /etc/ssl/certs/webhook-ca.crt
-            subPath: ca.crt
-            readOnly: true
-          - name: {{ include "azdo-runner-operator.fullname" . }}-svc
-            mountPath: /etc/ssl/certs/webhook-svc.crt
-            subPath: tls.crt
-            readOnly: true
+          - name: {{ include "azdo-runner-operator.fullname" . }}-cert
+            mountPath: /certs
+            readOnly: false
           {{- with .Values.extraVolumeMounts }}
             {{- toYaml . | nindent 10 }}
           {{- end }}
       volumes:
-      - name: {{ include "azdo-runner-operator.fullname" . }}-ca
-        secret:
-          secretName: {{ include "azdo-runner-operator.fullname" . }}-ca
-      - name: {{ include "azdo-runner-operator.fullname" . }}-svc
-        secret:
-          secretName: {{ include "azdo-runner-operator.fullname" . }}-svc
+      - name: {{ include "azdo-runner-operator.fullname" . }}-cert
+        emptyDir: {}
       {{- with .Values.extraVolumes }}
         {{- toYaml . | nindent 6 }}
       {{- end }}
