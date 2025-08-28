@@ -1,0 +1,219 @@
+# AzDORunner Operator
+
+AzDORunner Operator is a Kubernetes operator designed to manage self-hosted Azure DevOps runners as custom resources within your Kubernetes cluster. It automates the lifecycle of runner pools, including provisioning, scaling, health checking, and secure webhook management, making it easier to integrate Azure DevOps pipelines with Kubernetes-native infrastructure.
+
+---
+
+## Architecture Overview
+
+- **Controller**: Watches for changes to custom resources (RunnerPools) and reconciles the desired state with the actual state in the cluster.
+- **CRD Entity**: Defines the schema for the RunnerPool custom resource, including required and optional fields, validation, and supported behaviors.
+- **Services**: Internal services handle Azure DevOps API communication, Kubernetes Pod management, health checks, and certificate management.
+- **Webhooks**: Admission webhooks for validation and mutation of RunnerPool resources, with automated certificate rotation for secure communication.
+
+---
+
+## Controller & Reconciliation Logic
+
+The controller (`AzDORunnerController`) is responsible for:
+
+- Watching for creation, updates, and deletion of RunnerPool CRDs.
+- Reconciling the desired state (as defined in the CRD) with the actual state in the cluster:
+  - Creating or deleting runner pods as needed.
+  - Managing runner registration with Azure DevOps.
+  - Handling capability-aware scheduling if enabled.
+  - Cleaning up resources on deletion (using a finalizer).
+- Reacting to changes in the CRD spec or status, and updating the status subresource with current information.
+
+**Reconciliation Flow:**
+
+1. Fetch the RunnerPool CRD instance.
+2. Validate and mutate (if needed) via webhooks.
+3. Check the current state of runner pods and Azure DevOps pool.
+4. Create, update, or delete pods to match the desired count and configuration.
+5. Update the CRD status.
+6. Handle finalization logic on deletion.
+
+---
+
+## RunnerPool CRD Entity
+
+
+The CRD is defined in `V1AzDORunnerEntity.cs` and represents a pool of Azure DevOps runners. Below are the key fields, their valid values, and whether they are required or optional.
+
+### Spec Fields
+
+| Field                | Type      | Required | Description                                                                               |
+|----------------------|-----------|----------|-------------------------------------------------------------------------------------------|
+| `AzDoUrl`            | string    | Yes      | Azure DevOps organization or server URL.                                                  |
+| `Pool`               | string    | Yes      | Name of the Azure DevOps agent pool.                                                      |
+| `PatSecretName`      | string    | Yes      | Name of the Kubernetes secret containing the Azure DevOps PAT.                            |
+| `Image`              | string    | Yes      | Default image to use for the runners.                                                     |
+| `ImagePullPolicy`    | string    | No       | Image pull policy (`Always`, `IfNotPresent`, `Never`). Default: `IfNotPresent`            |
+| `CapabilityAware`    | bool      | No       | If true, runners are scheduled based on required capabilities. Default: false             |
+| `CapabilityImages`   | map       | No       | Map of capability name to image override.                                                 |
+| `TtlIdleSeconds`     | int       | No       | Time (seconds) to keep idle agents before scaling down. Default: 0                        |
+| `MinAgents`          | int       | No       | Minimum number of agents to keep running. Default: 0 (can't be set higher than MaxAgents) |
+| `MaxAgents`          | int       | No       | Maximum number of agents. Default: 10, must be at least 1                                 |
+| `PollIntervalSeconds`| int       | No       | Polling interval in seconds. Default: 5, minimum: 5                                       |
+
+#### Required Fields
+
+- `AzDoUrl`
+- `Pool`
+- `PatSecretName`
+- `Image`
+
+#### Optional Fields
+
+- `ImagePullPolicy`, `CapabilityAware`, `CapabilityImages`, `TtlIdleSeconds`, `MinAgents`, `MaxAgents`, `PollIntervalSeconds`
+
+### Status Fields
+
+- `ConnectionStatus`: Connection state to Azure DevOps (e.g., Connected, Disconnected)
+- `OrganizationName`: Name of the Azure DevOps organization
+- `AgentsSummary`: Summary of agents (e.g., "2/3")
+- `Active`: Whether the pool is active
+- `QueuedJobs`: Number of queued jobs
+- `RunningAgents`: Number of running agents
+- `LastPolled`: Last time the pool was polled
+- `LastError`: Last error message, if any
+- `Agents`: List of agent details
+- `Conditions`: List of status conditions
+
+### Example CRD YAML
+
+```yaml
+apiVersion: devops.opentools.mf/v1
+kind: RunnerPool
+metadata:
+  name: example-runnerpool
+spec:
+  AzDoUrl: https://dev.azure.com/my-org
+  Pool: my-azdo-pool
+  PatSecretName: azdo-pat-secret
+  Image: my-custom-runner:latest
+  ImagePullPolicy: IfNotPresent
+  CapabilityAware: true
+  CapabilityImages:
+    gpu: my-gpu-runner:latest
+    mykeyword: mycustomimage:latest
+  TtlIdleSeconds: 600
+  MinAgents: 1
+  MaxAgents: 5
+  PollIntervalSeconds: 10
+```
+
+**Note:**
+
+- The `CapabilityImages` map can hold any key/value pairs. The key is a capability name (e.g., `gpu`, `mykeyword`), and the value is the image to use for agents with that capability.
+- When `CapabilityAware` is enabled, your Azure DevOps pipeline **must** set `demands` matching the capability key (e.g., `demands: - mykeyword`) for the correct agent/image to be spawned.
+
+### Example Azure DevOps Pipeline with Demands
+
+When using a capability-aware runner pool with custom `CapabilityImages`, your pipeline must specify `demands` that match the capability key. This ensures the correct agent image is spawned for your job.
+
+```yaml
+pool:
+  name: my-azdo-pool
+  demands:
+    - mykeyword
+
+steps:
+  - script: echo "This job will run on an agent with the 'mykeyword' capability, using the image specified in CapabilityImages."
+    displayName: Run on custom capability agent
+```
+
+**Notes:**
+
+- Replace `mykeyword` with any capability key you defined in `CapabilityImages` in your RunnerPool CRD.
+- The job will only be scheduled on an agent that advertises the specified capability, and the operator will use the corresponding image.
+
+---
+
+## Services
+
+- **AzureDevOpsService**: Handles communication with Azure DevOps REST APIs for pool and agent management.
+- **KubernetesPodService**: Manages runner pod lifecycle in the cluster.
+- **HealthCheckService**: Monitors runner pod health and updates CRD status.
+- **WebhookCertificateManager/BackgroundService**: Manages TLS certificates for webhooks, including automatic rotation.
+- **AzureDevOpsPollingService**: Polls Azure DevOps for pool/agent status and triggers reconciliation if needed.
+
+---
+
+## Webhooks
+
+### Validation Webhook
+
+- Ensures CRD spec is valid (e.g., required fields are set, values are within allowed ranges).
+- Rejects invalid or incomplete RunnerPool resources.
+
+### Mutating Webhook
+
+- Sets default values for optional fields if not provided.
+- Can inject additional labels or environment variables.
+
+### Certificate Rotation
+
+- Webhooks use TLS for secure communication with the Kubernetes API server.
+- Certificates are managed and rotated automatically by the `WebhookCertificateManager` and `WebhookCertificateBackgroundService`.
+- Rotation ensures webhooks remain trusted and available without manual intervention.
+
+---
+
+## Capability-Aware vs. Non-Capability-Aware RunnerPools
+
+### Capability-Aware Example
+
+```yaml
+spec:
+  poolName: gpu-pool
+  organization: my-org
+  replicas: 2
+  capabilityAware: true
+  runnerLabels:
+    - gpu
+    - linux
+```
+
+**Behavior:**
+
+- The controller schedules runners based on required capabilities (e.g., only on nodes with GPUs).
+- Jobs in Azure DevOps that require specific capabilities will be matched to appropriate runners.
+
+### Non-Capability-Aware Example
+
+```yaml
+spec:
+  poolName: generic-pool
+  organization: my-org
+  replicas: 5
+  capabilityAware: false
+```
+
+**Behavior:**
+
+- Runners are scheduled without regard to node capabilities.
+- Any available runner can pick up any job, regardless of requirements.
+
+---
+
+## Troubleshooting
+
+- Check the status subresource of the RunnerPool for errors or conditions.
+- Review logs from the operator pod for reconciliation or webhook errors.
+- Ensure required secrets and service accounts are present and correctly referenced.
+
+---
+
+## Bugs & Known Issues
+
+- **Webhook validation error messages:**
+  - The webhooks will reject CRDs with invalid values (such as out-of-range numbers or unsupported enum values) at creation or update time.
+  - However, the error reason returned by the webhook may be generic or show as "unknown reason" in the Kubernetes events or API response, rather than a detailed validation message.
+
+---
+
+## License
+
+See [LICENSE](LICENSE).
