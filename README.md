@@ -1,38 +1,9 @@
+
 # AzDORunner Operator
 
 AzDORunner Operator is a Kubernetes operator designed to manage self-hosted Azure DevOps runners as custom resources within your Kubernetes cluster. It automates the lifecycle of runner pools, including provisioning, scaling, health checking, and secure webhook management, making it easier to integrate Azure DevOps pipelines with Kubernetes-native infrastructure.
 
 ---
-
-## Architecture Overview
-
-- **Controller**: Watches for changes to custom resources (RunnerPools) and reconciles the desired state with the actual state in the cluster.
-- **CRD Entity**: Defines the schema for the RunnerPool custom resource, including required and optional fields, validation, and supported behaviors.
-- **Services**: Internal services handle Azure DevOps API communication, Kubernetes Pod management, health checks, and certificate management.
-- **Webhooks**: Admission webhooks for validation and mutation of RunnerPool resources, with automated certificate rotation for secure communication.
-
----
-
-## Controller & Reconciliation Logic
-
-The controller (`AzDORunnerController`) is responsible for:
-
-- Watching for creation, updates, and deletion of RunnerPool CRDs.
-- Reconciling the desired state (as defined in the CRD) with the actual state in the cluster:
-  - Creating or deleting runner pods as needed.
-  - Managing runner registration with Azure DevOps.
-  - Handling capability-aware scheduling if enabled.
-  - Cleaning up resources on deletion (using a finalizer).
-- Reacting to changes in the CRD spec or status, and updating the status subresource with current information.
-
-**Reconciliation Flow:**
-
-1. Fetch the RunnerPool CRD instance.
-2. Validate and mutate (if needed) via webhooks.
-3. Check the current state of runner pods and Azure DevOps pool.
-4. Create, update, or delete pods to match the desired count and configuration.
-5. Update the CRD status.
-6. Handle finalization logic on deletion.
 
 ## Installation
 
@@ -50,10 +21,9 @@ For advanced configuration, see the [values.yaml](chart/azdo-runner-operator/val
 
 ---
 
-## RunnerPool CRD Entity
+## RunnerPool CRD: Capabilities, Configuration, and Usage
 
-
-The CRD is defined in `V1AzDORunnerEntity.cs` and represents a pool of Azure DevOps runners. Below are the key fields, their valid values, and whether they are required or optional.
+The core of the operator is the RunnerPool CRD, defined in `V1AzDORunnerEntity.cs`. This resource represents a pool of Azure DevOps runners and supports both standard and capability-aware scheduling.
 
 ### Spec Fields
 
@@ -95,7 +65,15 @@ The CRD is defined in `V1AzDORunnerEntity.cs` and represents a pool of Azure Dev
 - `Agents`: List of agent details
 - `Conditions`: List of status conditions
 
-### Example CRD YAML
+---
+
+## Capability-Aware and Standard RunnerPools
+
+### Capability-Aware RunnerPool
+
+When `CapabilityAware` is enabled, the operator will schedule runners based on required capabilities. You can define custom images for each capability using the `CapabilityImages` map. Your Azure DevOps pipeline must specify `demands` that match the capability key.
+
+**Example CRD YAML:**
 
 ```yaml
 apiVersion: devops.opentools.mf/v1
@@ -110,7 +88,6 @@ spec:
   ImagePullPolicy: IfNotPresent
   CapabilityAware: true
   CapabilityImages:
-    gpu: my-gpu-runner:latest
     mykeyword: mycustomimage:latest
   TtlIdleSeconds: 600
   MinAgents: 1
@@ -118,14 +95,12 @@ spec:
   PollIntervalSeconds: 10
 ```
 
-**Note:**
+**How it works:**
 
 - The `CapabilityImages` map can hold any key/value pairs. The key is a capability name (e.g., `gpu`, `mykeyword`), and the value is the image to use for agents with that capability.
 - When `CapabilityAware` is enabled, your Azure DevOps pipeline **must** set `demands` matching the capability key (e.g., `demands: - mykeyword`) for the correct agent/image to be spawned.
 
-### Example Azure DevOps Pipeline with Demands
-
-When using a capability-aware runner pool with custom `CapabilityImages`, your pipeline must specify `demands` that match the capability key. This ensures the correct agent image is spawned for your job.
+**Example Azure DevOps Pipeline:**
 
 ```yaml
 pool:
@@ -138,14 +113,62 @@ steps:
     displayName: Run on custom capability agent
 ```
 
-**Notes:**
+**Behavior:**
 
-- Replace `mykeyword` with any capability key you defined in `CapabilityImages` in your RunnerPool CRD.
-- The job will only be scheduled on an agent that advertises the specified capability, and the operator will use the corresponding image.
+- The controller schedules runners based on required capabilities (e.g., only on nodes with GPUs).
+- Jobs in Azure DevOps that require specific capabilities will be matched to appropriate runners.
+
+### Standard (Non-Capability-Aware) RunnerPool
+
+If `CapabilityAware` is false or omitted, runners are scheduled without regard to node capabilities. Any available runner can pick up any job, regardless of requirements.
+
+**Example CRD YAML:**
+
+```yaml
+spec:
+  poolName: generic-pool
+  organization: my-org-link
+  capabilityAware: false
+```
+
+**Behavior:**
+
+- Runners are scheduled without regard to node capabilities.
+- Any available runner can pick up any job, regardless of requirements.
 
 ---
 
-## Services
+## Operator Architecture & Services
+
+### Architecture Overview
+
+- **Controller**: Watches for changes to custom resources (RunnerPools) and reconciles the desired state with the actual state in the cluster.
+- **CRD Entity**: Defines the schema for the RunnerPool custom resource, including required and optional fields, validation, and supported behaviors.
+- **Services**: Internal services handle Azure DevOps API communication, Kubernetes Pod management, health checks, and certificate management.
+- **Webhooks**: Admission webhooks for validation and mutation of RunnerPool resources, with automated certificate rotation for secure communication.
+
+### Controller & Reconciliation Logic
+
+The controller (`AzDORunnerController`) is responsible for:
+
+- Watching for creation, updates, and deletion of RunnerPool CRDs.
+- Reconciling the desired state (as defined in the CRD) with the actual state in the cluster:
+  - Creating or deleting runner pods as needed.
+  - Managing runner registration with Azure DevOps.
+  - Handling capability-aware scheduling if enabled.
+  - Cleaning up resources on deletion (using a finalizer).
+- Reacting to changes in the CRD spec or status, and updating the status subresource with current information.
+
+**Reconciliation Flow:**
+
+1. Fetch the RunnerPool CRD instance.
+2. Validate and mutate (if needed) via webhooks.
+3. Check the current state of runner pods and Azure DevOps pool.
+4. Create, update, or delete pods to match the desired count and configuration.
+5. Update the CRD status.
+6. Handle finalization logic on deletion.
+
+### Internal Services
 
 - **AzureDevOpsService**: Handles communication with Azure DevOps REST APIs for pool and agent management.
 - **KubernetesPodService**: Manages runner pod lifecycle in the cluster.
@@ -155,7 +178,7 @@ steps:
 
 ---
 
-## Webhooks
+## Webhooks: Validation, Mutation, and Certificate Management
 
 ### Validation Webhook
 
@@ -172,43 +195,6 @@ steps:
 - Webhooks use TLS for secure communication with the Kubernetes API server.
 - Certificates are managed and rotated automatically by the `WebhookCertificateManager` and `WebhookCertificateBackgroundService`.
 - Rotation ensures webhooks remain trusted and available without manual intervention.
-
----
-
-## Capability-Aware vs. Non-Capability-Aware RunnerPools
-
-### Capability-Aware Example
-
-```yaml
-spec:
-  poolName: gpu-pool
-  organization: my-org
-  replicas: 2
-  capabilityAware: true
-  runnerLabels:
-    - gpu
-    - linux
-```
-
-**Behavior:**
-
-- The controller schedules runners based on required capabilities (e.g., only on nodes with GPUs).
-- Jobs in Azure DevOps that require specific capabilities will be matched to appropriate runners.
-
-### Non-Capability-Aware Example
-
-```yaml
-spec:
-  poolName: generic-pool
-  organization: my-org
-  replicas: 5
-  capabilityAware: false
-```
-
-**Behavior:**
-
-- Runners are scheduled without regard to node capabilities.
-- Any available runner can pick up any job, regardless of requirements.
 
 ---
 
