@@ -34,6 +34,20 @@ The controller (`AzDORunnerController`) is responsible for:
 5. Update the CRD status.
 6. Handle finalization logic on deletion.
 
+## Installation
+
+You can install the AzDORunner Operator using Helm from the official chart repository:
+
+```sh
+helm repo add mahmoudk1000 https://mahmoudk1000.github.io/charts/
+helm repo update
+helm install my-azdo-runner mahmoudk1000/azdo-runner-operator -n azdo-operator --create-namespace
+```
+
+Replace `my-azdo-runner` with your desired release name.
+
+For advanced configuration, see the [values.yaml](chart/azdo-runner-operator/values.yaml) file in this repository.
+
 ---
 
 ## RunnerPool CRD Entity
@@ -208,11 +222,8 @@ spec:
 
 ## Bugs & Known Issues
 
-- **Webhook validation error messages:**
-  - The webhooks will reject CRDs with invalid values (such as out-of-range numbers or unsupported enum values) at creation or update time.
-  - However, the error reason returned by the webhook may be generic or show as "unknown reason" in the Kubernetes events or API response, rather than a detailed validation message.
-
----
+- The webhooks will reject CRDs with invalid values (such as out-of-range numbers or unsupported enum values) at creation or update time.
+- However, the error reason returned by the webhook may be generic or show as "unknown reason" in the Kubernetes events or API response, rather than a detailed validation message.
 
 ## License
 
