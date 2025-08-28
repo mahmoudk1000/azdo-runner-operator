@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "azdo-runner-operator.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount | default 1 }}
+  replicas: 1
   selector:
     matchLabels:
       {{- include "azdo-runner-operator.selectorLabels" . | nindent 6 }}
@@ -83,5 +83,9 @@ spec:
       {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.hostAliases }}
+      hostAliases:
         {{- toYaml . | nindent 8 }}
       {{- end }}
