@@ -12,7 +12,7 @@ You can install the AzDORunner Operator using Helm from the official chart repos
 ```sh
 helm repo add mahmoudk1000 https://mahmoudk1000.github.io/charts/
 helm repo update
-helm install my-azdo-runner mahmoudk1000/azdo-runner-operator -n azdo-operator --create-namespace
+helm install my-azdo-operator mahmoudk1000/azdo-runner-operator -n azdo-operator --create-namespace
 ```
 
 Replace `my-azdo-runner` with your desired release name.

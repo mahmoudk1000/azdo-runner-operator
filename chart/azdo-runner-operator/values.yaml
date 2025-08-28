@@ -54,3 +54,12 @@ affinity: {}
 
 # Additional environment variables to add to the pod
 extraEnv: []
+
+# List of hostAliases to add to the pod
+hostAliases: []
+# Example:
+# hostAliases:
+#   - ip: "127.0.0.1"
+#     hostnames:
+#       - "foo.local"
+#       - "bar.local"
