@@ -213,7 +213,8 @@ public class AzureDevOpsPollingService : BackgroundService
 
         var completedPods = allPods.Where(pod =>
             pod.Status?.Phase == "Succeeded" ||
-            pod.Status?.Phase == "Failed").ToList();
+            pod.Status?.Phase == "Failed" ||
+            pod.Status?.Phase == "Error").ToList();
 
         foreach (var completedPod in completedPods)
         {
