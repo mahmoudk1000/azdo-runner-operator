@@ -23,6 +23,29 @@ For advanced configuration, see the [values.yaml](chart/azdo-runner-operator/val
 
 ## RunnerPool CRD: Capabilities, Configuration, and Usage
 
+## Example: Creating the Azure DevOps PAT Secret
+
+Before deploying a RunnerPool, you need to create a Kubernetes secret containing your Azure DevOps Personal Access Token (PAT). Here is an example manifest:
+
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: pat-token
+  namespace: default
+type: Opaque
+data:
+  token: <base64_token>
+```
+
+Replace `<base64_token>` with your PAT encoded in base64. For example, to encode your token:
+
+```sh
+echo -n "YOUR_PAT_TOKEN" | base64
+```
+
+Then use the output in the `token` field above.
+
 The core of the operator is the RunnerPool CRD, defined in `V1AzDORunnerEntity.cs`. This resource represents a pool of Azure DevOps runners and supports both standard and capability-aware scheduling.
 
 ### Spec Fields
