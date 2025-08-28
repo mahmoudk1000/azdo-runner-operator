@@ -1,50 +1,40 @@
+---
 name: Agents Factory
-
 on:
   push:
-    branches:
-      - main
-    paths:
-      - "agent/**"
+    branches: [main]
+    paths: [agent/**]
   workflow_dispatch:
-
 env:
   REGISTRY: ghcr.io
   IMAGE_NAME: ${{ github.repository }}/agent
-
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
-
     if: github.event_name != 'pull_request'
-
     strategy:
       matrix:
         runtime:
           - type: base
-            suffix: ""
+            suffix: ''
           - type: java
-            suffix: "-java"
+            suffix: -java
           - type: dotnet
-            suffix: "-dotnet"
+            suffix: -dotnet
           - type: nodejs
-            suffix: "-nodejs"
-
+            suffix: -nodejs
     permissions:
       contents: read
       packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
-
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-
       - name: Extract metadata for GHCR
         id: meta-ghcr
         uses: docker/metadata-action@v5
@@ -55,7 +45,6 @@ jobs:
             type=ref,event=branch,suffix=${{ matrix.runtime.suffix }}
             type=raw,value=latest${{ matrix.runtime.suffix }}
             type=sha,format=short,suffix=${{ matrix.runtime.suffix }}
-
       - name: Publish Image
         uses: docker/build-push-action@v5
         with:
