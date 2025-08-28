@@ -166,6 +166,45 @@ spec:
 
 ## Operator Architecture & Services
 
+---
+
+## Agents: Agent Factory and Available Agent Images
+
+The AzDORunner Operator uses an agent factory pattern to manage and provision Azure DevOps runner agents dynamically based on the configuration in your RunnerPool CRD. The agent factory is responsible for selecting and launching the appropriate agent image for each job, supporting both standard and capability-aware scheduling.
+
+### Agent Factory Overview
+
+- **Agent Factory**: The operator's agent factory logic determines which container image to use for each runner pod. It supports:
+  - **Standard agents**: Use the default image specified in the RunnerPool CRD.
+  - **Capability-aware agents**: If `capabilityAware` is enabled, the factory matches Azure DevOps pipeline `demands` to the `capabilityImages` map in the CRD, launching the correct image for each required capability.
+- The agent factory ensures that the right environment is provided for each job, whether it requires a generic runner or a specialized one (e.g., with Java, Node.js, or .NET preinstalled).
+
+### Available Agent Images
+
+The repository includes a base agent implementation and supports building custom agent images. The `agent/` directory contains:
+
+- `agent/Dockerfile`: The base Dockerfile for building a generic Azure DevOps agent image.
+- `agent/start.sh`: The entrypoint script used by the agent container to register and start the runner.
+
+#### Official and Example Images
+
+You can use the provided Dockerfile to build your own agent image, or use prebuilt images published to container registries. Example images referenced in the CRD examples include:
+
+- `ghcr.io/mahmoudk1000/azdo-runner-operator/agent:main` (generic base agent)
+- `ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-java` (Java-enabled agent)
+- `ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-nodejs` (Node.js-enabled agent)
+- `ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-dotnet` (.NET-enabled agent)
+
+You can extend the base Dockerfile to create your own custom images with additional tools or capabilities as needed.
+
+#### How Agent Selection Works
+
+- For **standard RunnerPools**, all agents use the default image specified in the CRD.
+- For **capability-aware RunnerPools**, the agent factory matches the pipeline's `demands` to the `capabilityImages` map and launches the corresponding image.
+- If a demand does not match any key in `capabilityImages`, the default image is used.
+
+---
+
 ### Architecture Overview
 
 - **Controller**: Watches for changes to custom resources (RunnerPools) and reconciles the desired state with the actual state in the cluster.
