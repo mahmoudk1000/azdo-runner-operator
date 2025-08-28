@@ -80,19 +80,22 @@ apiVersion: devops.opentools.mf/v1
 kind: RunnerPool
 metadata:
   name: example-runnerpool
+  namespacew: default
 spec:
-  AzDoUrl: https://dev.azure.com/my-org
-  Pool: my-azdo-pool
-  PatSecretName: azdo-pat-secret
-  Image: my-custom-runner:latest
-  ImagePullPolicy: IfNotPresent
-  CapabilityAware: true
-  CapabilityImages:
-    mykeyword: mycustomimage:latest
-  TtlIdleSeconds: 600
-  MinAgents: 1
-  MaxAgents: 5
-  PollIntervalSeconds: 10
+  azDoUrl: https://dev.azure.com/my-org
+  pool: AzDO
+  patSecretName: pat-token
+  image: ghcr.io/mahmoudk1000/azdo-runner-operator/agent:main
+  capabilityAware: true
+  capabilityImages:
+    java: ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-java
+    nodejs: ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-nodejs
+    dotnet: ghcr.io/mahmoudk1000/azdo-runner-operator/agent:latest-dotnet
+  maxAgents: 5
+  minAgents: 0
+  ttlIdleSeconds: 60
+  pollIntervalSeconds: 10
+  imagePullPolicy: IfNotPresent
 ```
 
 **How it works:**
@@ -126,8 +129,8 @@ If `CapabilityAware` is false or omitted, runners are scheduled without regard t
 
 ```yaml
 spec:
-  poolName: generic-pool
-  organization: my-org-link
+  pool: generic-pool
+  azDoUrl: my-org-link
   capabilityAware: false
 ```
 

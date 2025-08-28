@@ -3,7 +3,7 @@ name: CI
 on:
   push:
     branches: [main]
-    paths-ignore: [agent/**, .github/**]
+    paths-ignore: [agent/**, .github/**, README.md, chart/**]
   workflow_dispatch:
 env:
   REGISTRY: ghcr.io
