@@ -1,93 +1,36 @@
+---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ include "azdo-runner-operator.fullname" . }}
 rules:
-- apiGroups:
-  - apiextensions.k8s.io
-  resources:
-  - customresourcedefinitions
-  verbs:
-  - get
-  - list
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - devops.opentools.mf
-  resources:
-  - runnerpools
-  verbs:
-  - '*'
-- apiGroups:
-  - ""
-  resources:
-  - pods
-  verbs:
-  - '*'
-- apiGroups:
-  - ""
-  resources:
-  - secrets
-  verbs:
-  - get
-  - list
-  - create
-  - update
-  - watch
-- apiGroups:
-  - ""
-  resources:
-  - events
-  verbs:
-  - get
-  - list
-  - create
-  - update
-- apiGroups:
-  - coordination.k8s.io
-  resources:
-  - leases
-  verbs:
-  - get
-  - list
-  - watch
-  - create
-  - update
-  - patch
-  - delete
-- apiGroups:
-  - devops.opentools.mf
-  resources:
-  - runnerpools/status
-  verbs:
-  - get
-  - update
-  - patch
-- apiGroups:
-  - ""
-  resources:
-  - pods/status
-  verbs:
-  - get
-  - update
-  - patch
-- apiGroups:
-  - "admissionregistration.k8s.io"
-  resources:
-  - "validatingwebhookconfigurations"
-  verbs:
-  - get
-  - update
-  - patch
-  - create
-- apiGroups:
-  - "admissionregistration.k8s.io"
-  resources:
-  - "mutatingwebhookconfigurations"
-  verbs:
-  - get
-  - update
-  - patch
-  - create
+  - apiGroups: [apiextensions.k8s.io]
+    resources: [customresourcedefinitions]
+    verbs: [get, list, create, update, patch, delete]
+  - apiGroups: [devops.opentools.mf]
+    resources: [runnerpools]
+    verbs: ['*']
+  - apiGroups: ['']
+    resources: [pods]
+    verbs: ['*']
+  - apiGroups: ['']
+    resources: [secrets]
+    verbs: [get, list, create, update, watch]
+  - apiGroups: ['']
+    resources: [events]
+    verbs: [get, list, create, update]
+  - apiGroups: [coordination.k8s.io]
+    resources: [leases]
+    verbs: [get, list, watch, create, update, patch, delete]
+  - apiGroups: [devops.opentools.mf]
+    resources: [runnerpools/status]
+    verbs: [get, update, patch]
+  - apiGroups: ['']
+    resources: [pods/status]
+    verbs: [get, update, patch]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [validatingwebhookconfigurations]
+    verbs: [get, update, patch, create]
+  - apiGroups: [admissionregistration.k8s.io]
+    resources: [mutatingwebhookconfigurations]
+    verbs: [get, update, patch, create]

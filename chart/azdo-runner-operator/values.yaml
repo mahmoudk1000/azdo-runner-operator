@@ -1,13 +1,10 @@
-nameOverride: ""
-fullnameOverride: ""
-
-replicaCount: 1
-
+---
+nameOverride: ''
+fullnameOverride: ''
 image:
   repository: ghcr.io/mahmoudk1000/azdo-runner-operator/operator
   pullPolicy: IfNotPresent
   tag: latest
-
 # This is for the secrets for pulling an image from a private repository more information can be found here: https://kubernetes.io/docs/tasks/configure-pod-container/pull-image-private-registry/
 imagePullSecrets: []
 # This is to override the chart name.
@@ -18,9 +15,7 @@ podAnnotations: {}
 # This is for setting Kubernetes Labels to a Pod.
 # For more information checkout: https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/
 podLabels: {}
-
 podSecurityContext: {}
-
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
   # choice for the user. This also increases chances charts run on environments with little
@@ -45,11 +40,8 @@ extraVolumeMounts: []
 # - name: foo
 #   mountPath: "/etc/foo"
 #   readOnly: true
-
 nodeSelector: {}
-
 tolerations: []
-
 affinity: {}
 
 # Additional environment variables to add to the pod
