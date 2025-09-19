@@ -24,7 +24,7 @@ namespace AzDORunner.Services
                 {
                     _logger.LogError(ex, "Error during webhook certificate reconciliation");
                 }
-                await Task.Delay(TimeSpan.FromMinutes(60), stoppingToken);
+                await Task.Delay(TimeSpan.FromDays(1), stoppingToken);
             }
         }
     }

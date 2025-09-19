@@ -30,7 +30,7 @@ builder.Services.AddSingleton<IKubernetes>(provider =>
 });
 
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
-builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
+builder.Services.AddSingleton<KubernetesPodService>();
 
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateManager>();
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateBackgroundService>();
@@ -41,7 +41,7 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
     var pollingService = new AzureDevOpsPollingService(
         provider.GetRequiredService<ILogger<AzureDevOpsPollingService>>(),
         provider.GetRequiredService<IAzureDevOpsService>(),
-        provider.GetRequiredService<IKubernetesPodService>(),
+        provider.GetRequiredService<KubernetesPodService>(),
         provider.GetRequiredService<IKubernetes>());
     return pollingService;
 });

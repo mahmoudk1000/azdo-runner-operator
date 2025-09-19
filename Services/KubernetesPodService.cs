@@ -5,22 +5,7 @@ using static AzDORunner.Entities.V1AzDORunnerEntity;
 
 namespace AzDORunner.Services;
 
-public interface IKubernetesPodService
-{
-    Task<V1Pod> CreateAgentPodAsync(V1AzDORunnerEntity runnerPool, string pat, int agentIndex, bool isMinAgent = false, string? requiredCapability = null, Dictionary<string, string>? extraLabels = null);
-    Task<List<V1Pod>> GetActivePodsAsync(V1AzDORunnerEntity runnerPool);
-    Task<List<V1Pod>> GetAllRunnerPodsAsync(V1AzDORunnerEntity runnerPool);
-    Task<List<V1Pod>> GetMinAgentPodsAsync(V1AzDORunnerEntity runnerPool);
-    Task DeletePodAsync(string podName, string namespaceName);
-    Task DeleteAgentAsync(V1AzDORunnerEntity runnerPool, int agentIndex);
-    Task DeleteCompletedPodsAsync(V1AzDORunnerEntity runnerPool);
-    Task<V1PersistentVolumeClaim?> CreatePvcAsync(V1AzDORunnerEntity runnerPool, PvcSpec pvcSpec, int agentIndex);
-    Task<V1PersistentVolumeClaim?> TryGetExistingPvcAsync(V1AzDORunnerEntity runnerPool, int agentIndex, PvcSpec pvcSpec);
-    Task DeletePvcAsync(string pvcName, string namespaceName);
-    int GetNextAvailableAgentIndex(V1AzDORunnerEntity runnerPool);
-}
-
-public class KubernetesPodService : IKubernetesPodService
+public class KubernetesPodService
 {
     private readonly IKubernetes _kubernetesClient;
     private readonly ILogger<KubernetesPodService> _logger;

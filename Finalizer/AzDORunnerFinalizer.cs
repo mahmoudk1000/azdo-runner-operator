@@ -7,9 +7,9 @@ namespace AzDORunner.Finalizer;
 public class RunnerPoolFinalizer : IEntityFinalizer<V1AzDORunnerEntity>
 {
     private readonly ILogger<RunnerPoolFinalizer> _logger;
-    private readonly IKubernetesPodService _kubernetesPodService;
+    private readonly KubernetesPodService _kubernetesPodService;
 
-    public RunnerPoolFinalizer(ILogger<RunnerPoolFinalizer> logger, IKubernetesPodService kubernetesPodService)
+    public RunnerPoolFinalizer(ILogger<RunnerPoolFinalizer> logger, KubernetesPodService kubernetesPodService)
     {
         _logger = logger;
         _kubernetesPodService = kubernetesPodService;

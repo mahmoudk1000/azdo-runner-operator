@@ -15,14 +15,14 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
 {
     private readonly ILogger<RunnerPoolController> _logger;
     private readonly IAzureDevOpsService _azureDevOpsService;
-    private readonly IKubernetesPodService _kubernetesPodService;
+    private readonly KubernetesPodService _kubernetesPodService;
     private readonly IKubernetes _kubernetesClient;
     private readonly AzureDevOpsPollingService _pollingService;
 
     public RunnerPoolController(
         ILogger<RunnerPoolController> logger,
         IAzureDevOpsService azureDevOpsService,
-        IKubernetesPodService kubernetesPodService,
+        KubernetesPodService kubernetesPodService,
         IKubernetes kubernetesClient,
         AzureDevOpsPollingService pollingService)
     {

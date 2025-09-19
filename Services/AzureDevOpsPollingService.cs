@@ -10,14 +10,14 @@ public class AzureDevOpsPollingService : BackgroundService
 {
     private readonly ILogger<AzureDevOpsPollingService> _logger;
     private readonly IAzureDevOpsService _azureDevOpsService;
-    private readonly IKubernetesPodService _kubernetesPodService;
+    private readonly KubernetesPodService _kubernetesPodService;
     private readonly IKubernetes _kubernetesClient;
     private readonly ConcurrentDictionary<string, PoolPollInfo> _poolsToMonitor = new();
 
     public AzureDevOpsPollingService(
         ILogger<AzureDevOpsPollingService> logger,
         IAzureDevOpsService azureDevOpsService,
-        IKubernetesPodService kubernetesPodService,
+        KubernetesPodService kubernetesPodService,
         IKubernetes kubernetesClient)
     {
         _logger = logger;
