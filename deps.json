@@ -61,8 +61,8 @@
   },
   {
     "pname": "KubernetesClient",
-    "version": "17.0.4",
-    "hash": "sha256-Oeq/txSImY6NXT0t6/2ZBkZtaoaPDLgPZlSjReKVtxM="
+    "version": "17.0.14",
+    "hash": "sha256-00X5sgASNPafX/yI+z66amv0jcpOIzQwqBKAgKzYyPQ="
   },
   {
     "pname": "Localtunnel",
@@ -175,21 +175,6 @@
     "hash": "sha256-nsgRtkUUC5q+Wc76lu3xxRgOT0dw+EXGa4pFCeI0iEo="
   },
   {
-    "pname": "Microsoft.Extensions.Diagnostics.HealthChecks",
-    "version": "8.0.0",
-    "hash": "sha256-2Pq4oLKl+RJcLxOVJTPlql9HmpYyZWR4MDSMdxwjalA="
-  },
-  {
-    "pname": "Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions",
-    "version": "8.0.0",
-    "hash": "sha256-SBw25uazCJkBbV4TobGUcrpHTuEX9vCUklyd4LsnCps="
-  },
-  {
-    "pname": "Microsoft.Extensions.FileProviders.Abstractions",
-    "version": "8.0.0",
-    "hash": "sha256-uQSXmt47X2HGoVniavjLICbPtD2ReQOYQMgy3l0xuMU="
-  },
-  {
     "pname": "Microsoft.Extensions.FileProviders.Abstractions",
     "version": "9.0.8",
     "hash": "sha256-9X3roHvoAFzlTwVSlkbksB9EosKjVHeXuR5Jm682Wvk="
@@ -208,11 +193,6 @@
     "pname": "Microsoft.Extensions.Hosting",
     "version": "9.0.8",
     "hash": "sha256-0tnVesvcSrqvLarEVEf0kqJXdveLQCY7rCLis8b206Q="
-  },
-  {
-    "pname": "Microsoft.Extensions.Hosting.Abstractions",
-    "version": "8.0.0",
-    "hash": "sha256-0JBx+wwt5p1SPfO4m49KxNOXPAzAU0A+8tEc/itvpQE="
   },
   {
     "pname": "Microsoft.Extensions.Hosting.Abstractions",
