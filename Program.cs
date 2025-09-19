@@ -32,9 +32,6 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
 });
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureDevOpsPollingService>());
 
-builder.Services.AddHealthChecks()
-    .AddCheck<OperatorHealthCheck>("operator");
-
 var app = builder.Build();
 
 app.UseRouting();
