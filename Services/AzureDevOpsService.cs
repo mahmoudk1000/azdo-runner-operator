@@ -146,8 +146,11 @@ public class AzureDevOpsService : IAzureDevOpsService
         try
         {
             // Handle formats like:
-            // https://dev.azure.com/organization
-            // https://organization.visualstudio.com
+            // Cloud: https://dev.azure.com/organization
+            // Cloud: https://organization.visualstudio.com
+            // On-premises: https://tfs.company.com/tfs/CollectionName
+            // On-premises: https://azuredevops.company.com/CollectionName
+            // On-premises: https://server/tfs/CollectionName
             var uri = new Uri(azDoUrl);
 
             if (uri.Host == "dev.azure.com")
@@ -167,6 +170,38 @@ public class AzureDevOpsService : IAzureDevOpsService
                 {
                     return parts[0];
                 }
+            }
+            else
+            {
+                // Self-hosted Azure DevOps Server/TFS
+                // Extract collection name from path segments
+                var segments = uri.Segments;
+
+                // Look for collection name in various patterns:
+                // /tfs/CollectionName -> return CollectionName
+                // /CollectionName -> return CollectionName
+                if (segments.Length > 1)
+                {
+                    // Skip empty segments and common prefixes
+                    var meaningfulSegments = segments
+                        .Where(s => !string.IsNullOrWhiteSpace(s) && s != "/")
+                        .Select(s => s.TrimEnd('/'))
+                        .Where(s => !string.IsNullOrEmpty(s))
+                        .ToList();
+
+                    if (meaningfulSegments.Any())
+                    {
+                        if (meaningfulSegments.Count > 1 &&
+                            meaningfulSegments[0].Equals("tfs", StringComparison.OrdinalIgnoreCase))
+                        {
+                            return meaningfulSegments[1];
+                        }
+
+                        return meaningfulSegments[0];
+                    }
+                }
+
+                return uri.Host;
             }
 
             return "Unknown";
