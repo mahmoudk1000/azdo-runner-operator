@@ -3,7 +3,7 @@ using AzDORunner.Services;
 using k8s.Models;
 using KubeOps.Abstractions.Controller;
 using KubeOps.Abstractions.Rbac;
-using KubeOps.KubernetesClient;
+using k8s;
 
 namespace AzDORunner.Controller;
 
@@ -16,14 +16,14 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
     private readonly ILogger<RunnerPoolController> _logger;
     private readonly IAzureDevOpsService _azureDevOpsService;
     private readonly IKubernetesPodService _kubernetesPodService;
-    private readonly IKubernetesClient _kubernetesClient;
+    private readonly IKubernetes _kubernetesClient;
     private readonly AzureDevOpsPollingService _pollingService;
 
     public RunnerPoolController(
         ILogger<RunnerPoolController> logger,
         IAzureDevOpsService azureDevOpsService,
         IKubernetesPodService kubernetesPodService,
-        IKubernetesClient kubernetesClient,
+        IKubernetes kubernetesClient,
         AzureDevOpsPollingService pollingService)
     {
         _logger = logger;
@@ -82,12 +82,14 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         {
             var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
             var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
-            var allPvcs = _kubernetesClient.List<V1PersistentVolumeClaim>(namespaceName)
+            var allPvcs = _kubernetesClient.CoreV1.ListNamespacedPersistentVolumeClaim(namespaceName).Items
                 .Where(pvc => pvc.Metadata.Labels?.ContainsKey("runner-pool") == true &&
                              pvc.Metadata.Labels["runner-pool"] == entity.Metadata.Name)
                 .ToList();
 
-            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, namespaceName);
+            // TODO: Implement custom resource retrieval using official Kubernetes client
+            // For now, use the passed entity instead of fetching a fresh copy
+            var freshEntity = entity;
             if (freshEntity?.Status == null)
             {
                 _logger.LogWarning("Cannot update agent index tracking - freshEntity or Status is null");
@@ -143,8 +145,9 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
                 // Max agents reached, keep current index
             }
 
-            _kubernetesClient.UpdateStatus(freshEntity);
-            _logger.LogDebug("Updated agent index tracking for RunnerPool {Name}. Tracked indexes: {Indexes}",
+            // TODO: Implement custom resource status update using official Kubernetes client
+            // _kubernetesClient.UpdateStatus(freshEntity);
+            _logger.LogDebug("Updated agent index tracking for RunnerPool {Name}. Tracked indexes: {Indexes} (Status update temporarily disabled)",
                 entity.Metadata.Name, string.Join(", ", freshEntity.Status.AgentIndexes.Keys));
         }
         catch (Exception ex)
@@ -157,7 +160,9 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
     {
         try
         {
-            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            // TODO: Implement custom resource retrieval using official Kubernetes client
+            // var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            var freshEntity = entity; // Temporary: use the passed entity instead of fetching fresh
             if (freshEntity != null)
             {
                 freshEntity.Status.ConnectionStatus = status;
@@ -178,7 +183,10 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
                     });
                 }
 
-                _kubernetesClient.UpdateStatus(freshEntity);
+                // TODO: Implement custom resource status update using official Kubernetes client
+                // _kubernetesClient.UpdateStatus(freshEntity);
+                _logger.LogDebug("Would update status for RunnerPool {Name}: {Status} (Status update temporarily disabled)",
+                                entity.Metadata.Name, status);
             }
         }
         catch (Exception ex)
@@ -192,7 +200,7 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         try
         {
             var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
-            var secret = _kubernetesClient.Get<V1Secret>(entity.Spec.PatSecretName, namespaceName);
+            var secret = _kubernetesClient.CoreV1.ReadNamespacedSecret(entity.Spec.PatSecretName, namespaceName);
 
             if (secret?.Data?.TryGetValue("token", out var tokenBytes) == true)
             {

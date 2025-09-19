@@ -1,6 +1,6 @@
 ﻿using k8s.Models;
 using AzDORunner.Entities;
-using KubeOps.KubernetesClient;
+using k8s;
 using static AzDORunner.Entities.V1AzDORunnerEntity;
 
 namespace AzDORunner.Services;
@@ -22,10 +22,10 @@ public interface IKubernetesPodService
 
 public class KubernetesPodService : IKubernetesPodService
 {
-    private readonly IKubernetesClient _kubernetesClient;
+    private readonly IKubernetes _kubernetesClient;
     private readonly ILogger<KubernetesPodService> _logger;
 
-    public KubernetesPodService(IKubernetesClient kubernetesClient, ILogger<KubernetesPodService> logger)
+    public KubernetesPodService(IKubernetes kubernetesClient, ILogger<KubernetesPodService> logger)
     {
         _kubernetesClient = kubernetesClient;
         _logger = logger;
@@ -232,7 +232,7 @@ public class KubernetesPodService : IKubernetesPodService
                 }
             }
 
-            var createdPod = _kubernetesClient.Create(pod);
+            var createdPod = _kubernetesClient.CoreV1.CreateNamespacedPod(pod, namespaceName);
             var agentType = isMinAgent ? "minimum" : "regular";
             var mode = (!isMinAgent && runnerPool.Spec.TtlIdleSeconds == 0) ? "one-time (--once)" : "continuous";
             _logger.LogInformation("Created {AgentType} agent pod {PodName} in namespace {Namespace} (Mode: {Mode}, TtlIdleSeconds: {TtlIdleSeconds}, Capability: {Capability}, Image: {Image}, ImagePullPolicy: {ImagePullPolicy})",
@@ -252,7 +252,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+            var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
             // Only include truly active pods (Running or Pending)
             var activePods = allPods.Where(pod =>
@@ -275,7 +275,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+            var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
             // Include ALL pods belonging to this runner pool (for cleanup purposes)
             var allRunnerPods = allPods.Where(pod =>
@@ -297,7 +297,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+            var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
             // Get only minimum agent pods that are active
             var minAgentPods = allPods.Where(pod =>
@@ -320,7 +320,7 @@ public class KubernetesPodService : IKubernetesPodService
     {
         try
         {
-            _kubernetesClient.Delete<V1Pod>(podName, namespaceName);
+            _kubernetesClient.CoreV1.DeleteNamespacedPod(podName, namespaceName);
             _logger.LogInformation("Deleted pod {PodName} in namespace {Namespace}", podName, namespaceName);
             return Task.CompletedTask;
         }
@@ -340,7 +340,7 @@ public class KubernetesPodService : IKubernetesPodService
             _logger.LogInformation("🧹 Deleting completed pods for RunnerPool {Name} (Succeeded and Failed phases)", runnerPool.Metadata.Name);
 
             // Get all pods for this runner pool
-            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+            var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
             // Filter completed pods that belong to this runner pool
             // Equivalent to: kubectl delete pod --field-selector=status.phase==Succeeded,status.phase==Failed
@@ -354,7 +354,7 @@ public class KubernetesPodService : IKubernetesPodService
             {
                 try
                 {
-                    _kubernetesClient.Delete<V1Pod>(pod.Metadata.Name, namespaceName);
+                    _kubernetesClient.CoreV1.DeleteNamespacedPod(pod.Metadata.Name, namespaceName);
                     _logger.LogInformation("Bulk deleted completed pod {PodName} (Phase: {Phase})",
                         pod.Metadata.Name, pod.Status?.Phase);
                     deletedCount++;
@@ -419,7 +419,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var existingPvc = _kubernetesClient.Get<V1PersistentVolumeClaim>(pvcName, namespaceName);
+            var existingPvc = _kubernetesClient.CoreV1.ReadNamespacedPersistentVolumeClaim(pvcName, namespaceName);
 
             // Verify that this PVC belongs to our runner pool and has the correct labels
             if (existingPvc?.Metadata?.Labels != null &&
@@ -497,7 +497,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var createdPvc = _kubernetesClient.Create(pvc);
+            var createdPvc = _kubernetesClient.CoreV1.CreateNamespacedPersistentVolumeClaim(pvc, namespaceName);
             _logger.LogInformation("Created PVC {PvcName} with storage {Storage} for agent {AgentIndex}",
                 pvcName, pvcSpec.Storage, agentIndex);
             return Task.FromResult<V1PersistentVolumeClaim?>(createdPvc);
@@ -508,8 +508,8 @@ public class KubernetesPodService : IKubernetesPodService
             _logger.LogWarning("PVC {PvcName} already exists, attempting to reuse", pvcName);
             try
             {
-                var existingPvc = _kubernetesClient.Get<V1PersistentVolumeClaim>(pvcName, namespaceName);
-                return Task.FromResult(existingPvc);
+                var existingPvc = _kubernetesClient.CoreV1.ReadNamespacedPersistentVolumeClaim(pvcName, namespaceName);
+                return Task.FromResult<V1PersistentVolumeClaim?>(existingPvc);
             }
             catch (Exception getEx)
             {
@@ -528,7 +528,7 @@ public class KubernetesPodService : IKubernetesPodService
     {
         try
         {
-            _kubernetesClient.Delete<V1PersistentVolumeClaim>(pvcName, namespaceName);
+            _kubernetesClient.CoreV1.DeleteNamespacedPersistentVolumeClaim(pvcName, namespaceName);
             _logger.LogInformation("Deleted PVC {PvcName} in namespace {Namespace}", pvcName, namespaceName);
             return Task.CompletedTask;
         }
@@ -545,7 +545,7 @@ public class KubernetesPodService : IKubernetesPodService
 
         try
         {
-            var allPods = _kubernetesClient.List<V1Pod>(namespaceName);
+            var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
             var runnerPods = allPods.Where(pod =>
                 pod.Metadata.Labels?.ContainsKey("runner-pool") == true &&
                 pod.Metadata.Labels["runner-pool"] == runnerPool.Metadata.Name).ToList();

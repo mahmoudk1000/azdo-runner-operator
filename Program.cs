@@ -1,6 +1,6 @@
 using KubeOps.Operator;
 using AzDORunner.Services;
-using KubeOps.KubernetesClient;
+using k8s;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -13,7 +13,22 @@ builder.Services
     })
     .RegisterComponents();
 
+// Register the official Kubernetes client
+builder.Services.AddSingleton<IKubernetes>(provider =>
+{
+    var config = KubernetesClientConfiguration.InClusterConfig();
+    return new Kubernetes(config);
+});
+
 builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
+
+// Register the official Kubernetes client
+builder.Services.AddSingleton<IKubernetes>(provider =>
+{
+    var config = KubernetesClientConfiguration.InClusterConfig();
+    return new Kubernetes(config);
+});
+
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<IKubernetesPodService, KubernetesPodService>();
 
@@ -27,7 +42,7 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
         provider.GetRequiredService<ILogger<AzureDevOpsPollingService>>(),
         provider.GetRequiredService<IAzureDevOpsService>(),
         provider.GetRequiredService<IKubernetesPodService>(),
-        provider.GetRequiredService<IKubernetesClient>());
+        provider.GetRequiredService<IKubernetes>());
     return pollingService;
 });
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureDevOpsPollingService>());

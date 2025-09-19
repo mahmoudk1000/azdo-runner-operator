@@ -1,6 +1,6 @@
 using AzDORunner.Entities;
 using AzDORunner.Model.Domain;
-using KubeOps.KubernetesClient;
+using k8s;
 using k8s.Models;
 using System.Collections.Concurrent;
 
@@ -11,14 +11,14 @@ public class AzureDevOpsPollingService : BackgroundService
     private readonly ILogger<AzureDevOpsPollingService> _logger;
     private readonly IAzureDevOpsService _azureDevOpsService;
     private readonly IKubernetesPodService _kubernetesPodService;
-    private readonly IKubernetesClient _kubernetesClient;
+    private readonly IKubernetes _kubernetesClient;
     private readonly ConcurrentDictionary<string, PoolPollInfo> _poolsToMonitor = new();
 
     public AzureDevOpsPollingService(
         ILogger<AzureDevOpsPollingService> logger,
         IAzureDevOpsService azureDevOpsService,
         IKubernetesPodService kubernetesPodService,
-        IKubernetesClient kubernetesClient)
+        IKubernetes kubernetesClient)
     {
         _logger = logger;
         _azureDevOpsService = azureDevOpsService;
@@ -637,7 +637,9 @@ public class AzureDevOpsPollingService : BackgroundService
     {
         try
         {
-            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            // TODO: Implement custom resource retrieval using official Kubernetes client
+            // var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
+            var freshEntity = entity; // Temporary: use the passed entity instead of fetching fresh
             if (freshEntity != null)
             {
                 // Filter to only count operator-managed agents for status
@@ -682,8 +684,9 @@ public class AzureDevOpsPollingService : BackgroundService
                     });
                 }
 
-                _kubernetesClient.UpdateStatus(freshEntity);
-                _logger.LogDebug("Updated RunnerPool status: {ConnectionStatus}, {AgentCount} agents, {QueuedJobs} queued jobs, {ActivePods} active pods",
+                // TODO: Implement custom resource status update using official Kubernetes client
+                // _kubernetesClient.UpdateStatus(freshEntity);
+                _logger.LogDebug("Would update RunnerPool status: {ConnectionStatus}, {AgentCount} agents, {QueuedJobs} queued jobs, {ActivePods} active pods (Status update temporarily disabled)",
                     connectionStatus, azureAgents.Count, queuedJobs, activePods);
             }
         }

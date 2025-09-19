@@ -1,7 +1,7 @@
 using System.Security.Cryptography.X509Certificates;
 using System.Security.Cryptography;
 using k8s.Models;
-using KubeOps.KubernetesClient;
+using k8s;
 
 
 namespace AzDORunner.Services
@@ -9,7 +9,7 @@ namespace AzDORunner.Services
     public class WebhookCertificateManager
     {
         private readonly ILogger<WebhookCertificateManager> _logger;
-        private readonly IKubernetesClient _kubernetesClient;
+        private readonly IKubernetes _kubernetesClient;
         private readonly string _namespace;
         private readonly string _serviceName;
         private readonly string _validatingWebhookName;
@@ -19,7 +19,7 @@ namespace AzDORunner.Services
 
         public WebhookCertificateManager(
             ILogger<WebhookCertificateManager> logger,
-            IKubernetesClient kubernetesClient)
+            IKubernetes kubernetesClient)
         {
             _logger = logger;
             _kubernetesClient = kubernetesClient;
@@ -220,25 +220,25 @@ namespace AzDORunner.Services
         {
             try
             {
-                var existing = _kubernetesClient.Get<V1ValidatingWebhookConfiguration>(webhook.Metadata.Name);
+                var existing = _kubernetesClient.AdmissionregistrationV1.ReadValidatingWebhookConfiguration(webhook.Metadata.Name);
                 if (existing != null)
                 {
                     webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-                    _kubernetesClient.Update(webhook);
+                    _kubernetesClient.AdmissionregistrationV1.ReplaceValidatingWebhookConfiguration(webhook, webhook.Metadata.Name);
                     _logger.LogInformation($"Updated ValidatingWebhookConfiguration '{webhook.Metadata.Name}'.");
                 }
                 else
                 {
-                    _kubernetesClient.Create(webhook);
+                    _kubernetesClient.AdmissionregistrationV1.CreateValidatingWebhookConfiguration(webhook);
                     _logger.LogInformation($"Created ValidatingWebhookConfiguration '{webhook.Metadata.Name}'.");
                 }
             }
             catch (Exception ex)
             {
-                if (ex.Message.Contains("404"))
+                if (ex.Message.Contains("404") || ex.Message.Contains("NotFound"))
                 {
-                    _kubernetesClient.Create(webhook);
-                    _logger.LogInformation($"Created ValidatingWebhookConfiguration '{webhook.Metadata.Name}' (IDK yet).");
+                    _kubernetesClient.AdmissionregistrationV1.CreateValidatingWebhookConfiguration(webhook);
+                    _logger.LogInformation($"Created ValidatingWebhookConfiguration '{webhook.Metadata.Name}' (after not found).");
                 }
                 else
                 {
@@ -294,25 +294,25 @@ namespace AzDORunner.Services
         {
             try
             {
-                var existing = _kubernetesClient.Get<V1MutatingWebhookConfiguration>(webhook.Metadata.Name);
+                var existing = _kubernetesClient.AdmissionregistrationV1.ReadMutatingWebhookConfiguration(webhook.Metadata.Name);
                 if (existing != null)
                 {
                     webhook.Metadata.ResourceVersion = existing.Metadata.ResourceVersion;
-                    _kubernetesClient.Update(webhook);
+                    _kubernetesClient.AdmissionregistrationV1.ReplaceMutatingWebhookConfiguration(webhook, webhook.Metadata.Name);
                     _logger.LogInformation($"Updated MutatingWebhookConfiguration '{webhook.Metadata.Name}'.");
                 }
                 else
                 {
-                    _kubernetesClient.Create(webhook);
+                    _kubernetesClient.AdmissionregistrationV1.CreateMutatingWebhookConfiguration(webhook);
                     _logger.LogInformation($"Created MutatingWebhookConfiguration '{webhook.Metadata.Name}'.");
                 }
             }
             catch (Exception ex)
             {
-                if (ex.Message.Contains("404"))
+                if (ex.Message.Contains("404") || ex.Message.Contains("NotFound"))
                 {
-                    _kubernetesClient.Create(webhook);
-                    _logger.LogInformation($"Created MutatingWebhookConfiguration '{webhook.Metadata.Name}' (IDK yet).");
+                    _kubernetesClient.AdmissionregistrationV1.CreateMutatingWebhookConfiguration(webhook);
+                    _logger.LogInformation($"Created MutatingWebhookConfiguration '{webhook.Metadata.Name}' (after not found).");
                 }
                 else
                 {

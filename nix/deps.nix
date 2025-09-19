@@ -45,11 +45,6 @@
     hash = "sha256-1YWTHVIrAN0hCH/kbRzvXJWBzJ+I6wkzleX8AIgKmBY=";
   })
   (fetchNuGet {
-    pname = "KubeOps.KubernetesClient";
-    version = "9.11.2";
-    hash = "sha256-HAxJAW6FO+IJu4bB8Bo1iy7YWoMgt6ipL1Kr4NF3560=";
-  })
-  (fetchNuGet {
     pname = "KubeOps.Operator";
     version = "9.11.2";
     hash = "sha256-XzgSbZOb2E4hb5RYRufEoHYNJ+LDHaup3wywqtADwBI=";
@@ -66,8 +61,8 @@
   })
   (fetchNuGet {
     pname = "KubernetesClient";
-    version = "17.0.4";
-    hash = "sha256-Oeq/txSImY6NXT0t6/2ZBkZtaoaPDLgPZlSjReKVtxM=";
+    version = "17.0.14";
+    hash = "sha256-00X5sgASNPafX/yI+z66amv0jcpOIzQwqBKAgKzYyPQ=";
   })
   (fetchNuGet {
     pname = "Localtunnel";
