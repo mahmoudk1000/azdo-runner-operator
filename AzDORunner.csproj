@@ -1,19 +1,15 @@
-﻿<Project Sdk="Microsoft.NET.Sdk.Web">
+<Project Sdk="Microsoft.NET.Sdk.Web">
 
     <PropertyGroup>
       <OperatorName>azdo-runner-operator</OperatorName>
-        <OutputType>Exe</OutputType>
-        <TargetFramework>net9.0</TargetFramework>
-        <LangVersion>12.0</LangVersion>
-        <Nullable>enable</Nullable>
-        <ImplicitUsings>true</ImplicitUsings>
-        <IsPackable>false</IsPackable>
-        <GenerateDocumentationFile>false</GenerateDocumentationFile>
-        <!-- Force automatic generation for all builds -->
-        <!-- <GenerateOperatorResources>true</GenerateOperatorResources> -->
-        <KubeOpsConfigOut>$(MSBuildProjectDirectory)\config</KubeOpsConfigOut>
-        <DockerImage>mahmoudk1000/azdo-runner-operator</DockerImage>
-        <DockerImageTag>latest</DockerImageTag>
+      <TargetFramework>net9.0</TargetFramework>
+      <LangVersion>12.0</LangVersion>
+      <Nullable>enable</Nullable>
+      <ImplicitUsings>true</ImplicitUsings>
+      <!-- <GenerateOperatorResources>true</GenerateOperatorResources> -->
+      <KubeOpsConfigOut>$(MSBuildProjectDirectory)\config</KubeOpsConfigOut>
+      <DockerImage>mahmoudk1000/azdo-runner-operator</DockerImage>
+      <DockerImageTag>latest</DockerImageTag>
     </PropertyGroup>
 
     <ItemGroup>
@@ -23,8 +19,7 @@
       </PackageReference>
       <PackageReference Include="KubeOps.Operator" Version="9.11.2" />
       <PackageReference Include="KubeOps.Operator.Web" Version="9.11.2" />
-      <PackageReference Include="KubeOps.Templates" Version="9.11.2" />
-      <PackageReference Include="KubernetesClient" Version="17.0.4" />
+      <PackageReference Include="KubernetesClient" Version="17.0.14" />
       <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks" Version="8.0.0" />
       <PackageReference Include="Microsoft.Extensions.Http" Version="8.0.0" />
     </ItemGroup>

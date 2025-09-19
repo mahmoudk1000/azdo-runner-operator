@@ -1,4 +1,4 @@
-﻿using k8s.Models;
+using k8s.Models;
 using KubeOps.Abstractions.Entities;
 using AzDORunner.Model.Domain;
 using DataAnnotationsRequired = System.ComponentModel.DataAnnotations.RequiredAttribute;
@@ -16,6 +16,35 @@ namespace AzDORunner.Entities;
 [GenericAdditionalPrinterColumn(".status.runningAgents", "Running", "integer")]
 public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1AzDORunnerEntitySpec, V1AzDORunnerEntity.V1AzDORunnerEntityStatus>
 {
+    public class ExtraEnvVar
+    {
+        [DataAnnotationsRequired]
+        public string Name { get; set; } = string.Empty;
+
+        public string? Value { get; set; }
+
+        public V1EnvVarSource? ValueFrom { get; set; }
+    }
+
+    public class PvcSpec
+    {
+        [DataAnnotationsRequired]
+        public string Name { get; set; } = string.Empty;
+
+        [DataAnnotationsRequired]
+        public string MountPath { get; set; } = string.Empty;
+
+        public string StorageClass { get; set; } = string.Empty;
+
+        [DataAnnotationsRequired]
+        public string Storage { get; set; } = string.Empty;
+
+        public bool CreatePvc { get; set; } = true;
+
+        public bool Optional { get; set; } = false;
+
+        public bool DeleteWithAgent { get; set; } = false;
+    }
     public class V1AzDORunnerEntitySpec : IValidatableObject
     {
         [DataAnnotationsRequired]
@@ -46,6 +75,10 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public int MaxAgents { get; set; } = 10;
 
         public int PollIntervalSeconds { get; set; } = 5;
+
+        public List<ExtraEnvVar> ExtraEnv { get; set; } = new();
+
+        public List<PvcSpec> Pvcs { get; set; } = new();
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -84,6 +117,49 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
                     "MaxAgents must be at least 1",
                     new[] { nameof(MaxAgents) });
             }
+
+            // Validate ExtraEnv
+            foreach (var envVar in ExtraEnv)
+            {
+                if (string.IsNullOrWhiteSpace(envVar.Name))
+                {
+                    yield return new ValidationResult(
+                        "ExtraEnv entries must have a non-empty Name",
+                        new[] { nameof(ExtraEnv) });
+                }
+
+                if (string.IsNullOrEmpty(envVar.Value) && envVar.ValueFrom == null)
+                {
+                    yield return new ValidationResult(
+                        $"ExtraEnv entry '{envVar.Name}' must have either Value or ValueFrom specified",
+                        new[] { nameof(ExtraEnv) });
+                }
+            }
+
+            // Validate PVCs
+            foreach (var pvc in Pvcs)
+            {
+                if (string.IsNullOrWhiteSpace(pvc.Name))
+                {
+                    yield return new ValidationResult(
+                        "PVC entries must have a non-empty Name",
+                        new[] { nameof(Pvcs) });
+                }
+
+                if (string.IsNullOrWhiteSpace(pvc.MountPath))
+                {
+                    yield return new ValidationResult(
+                        $"PVC '{pvc.Name}' must have a non-empty MountPath",
+                        new[] { nameof(Pvcs) });
+                }
+
+                if (string.IsNullOrWhiteSpace(pvc.Storage))
+                {
+                    yield return new ValidationResult(
+                        $"PVC '{pvc.Name}' must have a non-empty Storage value",
+                        new[] { nameof(Pvcs) });
+                }
+            }
         }
     }
 
@@ -95,10 +171,12 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public bool Active { get; set; } = false;
         public int QueuedJobs { get; set; } = 0;
         public int RunningAgents { get; set; } = 0;
+        public int CurrentAgentIndex { get; set; } = 0;
         public DateTime? LastPolled { get; set; }
         public string? LastError { get; set; }
         public List<Agent> Agents { get; set; } = new();
         public List<StatusCondition> Conditions { get; set; } = new();
+        public Dictionary<int, AgentIndexInfo> AgentIndexes { get; set; } = new();
     }
 
     public class StatusCondition
@@ -108,5 +186,14 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public string Reason { get; set; } = string.Empty;
         public string Message { get; set; } = string.Empty;
         public DateTime LastTransitionTime { get; set; } = DateTime.UtcNow;
+    }
+
+    public class AgentIndexInfo
+    {
+        public string PodName { get; set; } = string.Empty;
+        public string Status { get; set; } = string.Empty;
+        public bool IsMinAgent { get; set; } = false;
+        public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
+        public List<string> PvcNames { get; set; } = new();
     }
 }

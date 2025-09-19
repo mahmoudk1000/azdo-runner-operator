@@ -2,12 +2,11 @@
   "version": 1,
   "isRoot": true,
   "tools": {
-    "kubeops.cli": {
-      "version": "9.11.1",
+    "KubeOps.Cli": {
+      "version": "9.11.2",
       "commands": [
         "kubeops"
-      ],
-      "rollForward": false
+      ]
     }
   }
 }

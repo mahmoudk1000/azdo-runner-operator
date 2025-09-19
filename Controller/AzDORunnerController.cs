@@ -9,6 +9,7 @@ namespace AzDORunner.Controller;
 
 [EntityRbac(typeof(V1AzDORunnerEntity), Verbs = RbacVerb.All)]
 [EntityRbac(typeof(V1Pod), Verbs = RbacVerb.All)]
+[EntityRbac(typeof(V1PersistentVolumeClaim), Verbs = RbacVerb.All)]
 [EntityRbac(typeof(V1Secret), Verbs = RbacVerb.Get | RbacVerb.List)]
 public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
 {
@@ -53,6 +54,9 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
 
             UpdateStatus(entity, "Connected", null);
 
+            // Update agent index tracking
+            await UpdateAgentIndexTracking(entity);
+
             // Register with the polling service for continuous monitoring
             _pollingService.RegisterPool(entity, pat);
 
@@ -70,6 +74,83 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         _logger.LogInformation("RunnerPool {Name} deleted, cleaning up resources", entity.Metadata.Name);
         _pollingService.UnregisterPool(entity.Metadata.Name);
         return Task.CompletedTask;
+    }
+
+    private async Task UpdateAgentIndexTracking(V1AzDORunnerEntity entity)
+    {
+        try
+        {
+            var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
+            var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
+            var allPvcs = _kubernetesClient.List<V1PersistentVolumeClaim>(namespaceName)
+                .Where(pvc => pvc.Metadata.Labels?.ContainsKey("runner-pool") == true &&
+                             pvc.Metadata.Labels["runner-pool"] == entity.Metadata.Name)
+                .ToList();
+
+            var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, namespaceName);
+            if (freshEntity?.Status == null)
+            {
+                _logger.LogWarning("Cannot update agent index tracking - freshEntity or Status is null");
+                return;
+            }
+
+            if (freshEntity.Status.AgentIndexes == null)
+            {
+                freshEntity.Status.AgentIndexes = new Dictionary<int, V1AzDORunnerEntity.AgentIndexInfo>();
+            }
+
+            // Clear existing index tracking and rebuild from current state
+            freshEntity.Status.AgentIndexes.Clear();
+
+            foreach (var pod in allPods)
+            {
+                var podName = pod.Metadata.Name;
+                var expectedPrefix = $"{entity.Metadata.Name}-agent-";
+
+                if (podName.StartsWith(expectedPrefix))
+                {
+                    var indexStr = podName.Substring(expectedPrefix.Length);
+                    if (int.TryParse(indexStr, out var index))
+                    {
+                        var isMinAgent = pod.Metadata.Labels?.ContainsKey("min-agent") == true &&
+                                        pod.Metadata.Labels["min-agent"] == "true";
+
+                        var associatedPvcs = allPvcs
+                            .Where(pvc => pvc.Metadata.Labels?.ContainsKey("agent-index") == true &&
+                                         pvc.Metadata.Labels["agent-index"] == index.ToString())
+                            .Select(pvc => pvc.Metadata.Name)
+                            .ToList();
+
+                        freshEntity.Status.AgentIndexes[index] = new V1AzDORunnerEntity.AgentIndexInfo
+                        {
+                            PodName = podName,
+                            Status = pod.Status?.Phase ?? "Unknown",
+                            IsMinAgent = isMinAgent,
+                            CreatedAt = pod.Metadata.CreationTimestamp?.ToUniversalTime() ?? DateTime.UtcNow,
+                            PvcNames = associatedPvcs
+                        };
+                    }
+                }
+            }
+
+            // Update the current agent index to be the next available index
+            try
+            {
+                freshEntity.Status.CurrentAgentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+            }
+            catch (InvalidOperationException)
+            {
+                // Max agents reached, keep current index
+            }
+
+            _kubernetesClient.UpdateStatus(freshEntity);
+            _logger.LogDebug("Updated agent index tracking for RunnerPool {Name}. Tracked indexes: {Indexes}",
+                entity.Metadata.Name, string.Join(", ", freshEntity.Status.AgentIndexes.Keys));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to update agent index tracking for RunnerPool {Name}", entity.Metadata.Name);
+        }
     }
 
     private void UpdateStatus(V1AzDORunnerEntity entity, string status, string? error)

@@ -435,7 +435,8 @@ public class AzureDevOpsPollingService : BackgroundService
                 }
                 else
                 {
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, null, extraLabels);
+                    var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex, false, null, extraLabels);
                 }
             }
 
@@ -465,7 +466,8 @@ public class AzureDevOpsPollingService : BackgroundService
                 }
                 var labels = extraLabels != null ? new Dictionary<string, string>(extraLabels) : new Dictionary<string, string>();
                 labels["job-request-id"] = job.RequestId.ToString();
-                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, false, capability, labels);
+                var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex, false, capability, labels);
                 _logger.LogInformation("Spawned agent with capability '{Capability}' for job {JobId} (labels: {Labels})", capability, job.RequestId, string.Join(",", labels.Select(kv => $"{kv.Key}={kv.Value}")));
             }
         }
@@ -474,7 +476,8 @@ public class AzureDevOpsPollingService : BackgroundService
             _logger.LogError(ex, "Failed to spawn capability-aware agents, falling back to regular spawning");
             foreach (var job in jobsToSpawn)
             {
-                await _kubernetesPodService.CreateAgentPodAsync(entity, pat);
+                var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+                await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex);
             }
         }
     }
@@ -573,7 +576,8 @@ public class AzureDevOpsPollingService : BackgroundService
                 try
                 {
                     // Create new capability-specific min agent
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, isMinAgent: true, capabilityToAdd);
+                    var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex, true, capabilityToAdd);
                     _logger.LogInformation("Created capability-specific minimum agent with capability '{Capability}'", capabilityToAdd);
 
                     // Remove the base agent
@@ -741,7 +745,8 @@ public class AzureDevOpsPollingService : BackgroundService
 
                 for (int i = 0; i < neededMinAgents; i++)
                 {
-                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, isMinAgent: true);
+                    var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
+                    await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex, true);
                 }
             }
             else if (neededMinAgents < 0)
