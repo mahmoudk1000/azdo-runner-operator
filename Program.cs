@@ -20,6 +20,7 @@ builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNu
 
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<KubernetesPodService>();
+builder.Services.AddSingleton<IRunnerPoolStatusService, RunnerPoolStatusService>();
 
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateManager>();
 builder.Services.AddSingleton<AzDORunner.Services.WebhookCertificateBackgroundService>();
@@ -31,7 +32,8 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
         provider.GetRequiredService<ILogger<AzureDevOpsPollingService>>(),
         provider.GetRequiredService<IAzureDevOpsService>(),
         provider.GetRequiredService<KubernetesPodService>(),
-        provider.GetRequiredService<IKubernetes>());
+        provider.GetRequiredService<IKubernetes>(),
+        provider.GetRequiredService<IRunnerPoolStatusService>());
     return pollingService;
 });
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureDevOpsPollingService>());

@@ -239,11 +239,15 @@ public class KubernetesPodService
         {
             var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
-            // Only include truly active pods (Running or Pending)
+            // Include pods that are active or in the process of starting up
             var activePods = allPods.Where(pod =>
                 pod.Metadata.Labels?.ContainsKey("runner-pool") == true &&
                 pod.Metadata.Labels["runner-pool"] == runnerPool.Metadata.Name &&
-                (pod.Status?.Phase == "Running" || pod.Status?.Phase == "Pending")).ToList();
+                (pod.Status?.Phase == "Running" ||
+                 pod.Status?.Phase == "Pending" ||
+                 // Include ContainerCreating pods as active while they're starting up
+                 (pod.Status?.Phase == "Pending" &&
+                  pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true))).ToList();
 
             return Task.FromResult(activePods);
         }

@@ -18,19 +18,22 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
     private readonly KubernetesPodService _kubernetesPodService;
     private readonly IKubernetes _kubernetesClient;
     private readonly AzureDevOpsPollingService _pollingService;
+    private readonly IRunnerPoolStatusService _statusService;
 
     public RunnerPoolController(
         ILogger<RunnerPoolController> logger,
         IAzureDevOpsService azureDevOpsService,
         KubernetesPodService kubernetesPodService,
         IKubernetes kubernetesClient,
-        AzureDevOpsPollingService pollingService)
+        AzureDevOpsPollingService pollingService,
+        IRunnerPoolStatusService statusService)
     {
         _logger = logger;
         _azureDevOpsService = azureDevOpsService;
         _kubernetesPodService = kubernetesPodService;
         _kubernetesClient = kubernetesClient;
         _pollingService = pollingService;
+        _statusService = statusService;
     }
 
     public async Task ReconcileAsync(V1AzDORunnerEntity entity, CancellationToken cancellationToken)
@@ -87,9 +90,8 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
                              pvc.Metadata.Labels["runner-pool"] == entity.Metadata.Name)
                 .ToList();
 
-            // TODO: Implement custom resource retrieval using official Kubernetes client
-            // For now, use the passed entity instead of fetching a fresh copy
-            var freshEntity = entity;
+            // Get the latest version of the entity from Kubernetes
+            var freshEntity = await _statusService.GetRunnerPoolAsync(entity.Metadata.Name, namespaceName);
             if (freshEntity?.Status == null)
             {
                 _logger.LogWarning("Cannot update agent index tracking - freshEntity or Status is null");
@@ -145,9 +147,9 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
                 // Max agents reached, keep current index
             }
 
-            // TODO: Implement custom resource status update using official Kubernetes client
-            // _kubernetesClient.UpdateStatus(freshEntity);
-            _logger.LogDebug("Updated agent index tracking for RunnerPool {Name}. Tracked indexes: {Indexes} (Status update temporarily disabled)",
+            // Update the status using our status service
+            await _statusService.UpdateStatusAsync(freshEntity);
+            _logger.LogDebug("Updated agent index tracking for RunnerPool {Name}. Tracked indexes: {Indexes}",
                 entity.Metadata.Name, string.Join(", ", freshEntity.Status.AgentIndexes.Keys));
         }
         catch (Exception ex)
@@ -156,13 +158,12 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         }
     }
 
-    private void UpdateStatus(V1AzDORunnerEntity entity, string status, string? error)
+    private async void UpdateStatus(V1AzDORunnerEntity entity, string status, string? error)
     {
         try
         {
-            // TODO: Implement custom resource retrieval using official Kubernetes client
-            // var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
-            var freshEntity = entity; // Temporary: use the passed entity instead of fetching fresh
+            // Get the latest version of the entity from Kubernetes
+            var freshEntity = await _statusService.GetRunnerPoolAsync(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
             if (freshEntity != null)
             {
                 freshEntity.Status.ConnectionStatus = status;
@@ -183,9 +184,9 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
                     });
                 }
 
-                // TODO: Implement custom resource status update using official Kubernetes client
-                // _kubernetesClient.UpdateStatus(freshEntity);
-                _logger.LogDebug("Would update status for RunnerPool {Name}: {Status} (Status update temporarily disabled)",
+                // Update the status using our status service
+                await _statusService.UpdateStatusAsync(freshEntity);
+                _logger.LogDebug("Updated status for RunnerPool {Name}: {Status}",
                                 entity.Metadata.Name, status);
             }
         }

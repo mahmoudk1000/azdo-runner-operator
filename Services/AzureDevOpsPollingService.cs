@@ -12,18 +12,21 @@ public class AzureDevOpsPollingService : BackgroundService
     private readonly IAzureDevOpsService _azureDevOpsService;
     private readonly KubernetesPodService _kubernetesPodService;
     private readonly IKubernetes _kubernetesClient;
+    private readonly IRunnerPoolStatusService _statusService;
     private readonly ConcurrentDictionary<string, PoolPollInfo> _poolsToMonitor = new();
 
     public AzureDevOpsPollingService(
         ILogger<AzureDevOpsPollingService> logger,
         IAzureDevOpsService azureDevOpsService,
         KubernetesPodService kubernetesPodService,
-        IKubernetes kubernetesClient)
+        IKubernetes kubernetesClient,
+        IRunnerPoolStatusService statusService)
     {
         _logger = logger;
         _azureDevOpsService = azureDevOpsService;
         _kubernetesPodService = kubernetesPodService;
         _kubernetesClient = kubernetesClient;
+        _statusService = statusService;
     }
 
     public void RegisterPool(V1AzDORunnerEntity entity, string pat)
@@ -148,6 +151,9 @@ public class AzureDevOpsPollingService : BackgroundService
 
             // If we successfully polled everything, set status to Connected
             connectionStatus = "Connected";
+
+            // 0. Clean up error pods immediately and retry if needed
+            await CleanupErrorPodsAsync(entity, pat, allPods);
 
             // 1. Clean up completed agents/pods
             await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
@@ -322,6 +328,71 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
+    private async Task CleanupErrorPodsAsync(V1AzDORunnerEntity entity, string pat, List<V1Pod> allPods)
+    {
+        // Find pods with Error status or stuck in ContainerCreating for too long
+        var errorPods = allPods.Where(pod =>
+            pod.Status?.Phase == "Error" ||
+            (pod.Status?.Phase == "Pending" &&
+             pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ImagePullBackOff" ||
+                                                     cs.State?.Waiting?.Reason == "ErrImagePull" ||
+                                                     cs.State?.Waiting?.Reason == "CrashLoopBackOff") == true) ||
+            // Check for pods stuck in ContainerCreating for more than 10 minutes
+            (pod.Status?.Phase == "Pending" &&
+             pod.Metadata.CreationTimestamp.HasValue &&
+             DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value > TimeSpan.FromMinutes(10) &&
+             pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true)).ToList();
+
+        foreach (var errorPod in errorPods)
+        {
+            try
+            {
+                var podName = errorPod.Metadata.Name;
+                var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
+
+                _logger.LogWarning("Found error pod '{PodName}' with status '{Phase}'. Deleting and will retry creation.",
+                    podName, errorPod.Status?.Phase);
+
+                // Log container status details for debugging
+                if (errorPod.Status?.ContainerStatuses != null)
+                {
+                    foreach (var containerStatus in errorPod.Status.ContainerStatuses)
+                    {
+                        if (containerStatus.State?.Waiting != null)
+                        {
+                            _logger.LogWarning("Container '{ContainerName}' in pod '{PodName}' is waiting with reason: {Reason}, message: {Message}",
+                                containerStatus.Name, podName, containerStatus.State.Waiting.Reason, containerStatus.State.Waiting.Message);
+                        }
+                        if (containerStatus.State?.Terminated != null)
+                        {
+                            _logger.LogWarning("Container '{ContainerName}' in pod '{PodName}' terminated with reason: {Reason}, exit code: {ExitCode}",
+                                containerStatus.Name, podName, containerStatus.State.Terminated.Reason, containerStatus.State.Terminated.ExitCode);
+                        }
+                    }
+                }
+
+                // Try to unregister the agent from Azure DevOps if it exists
+                try
+                {
+                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, podName, pat);
+                    _logger.LogInformation("Unregistered failed agent '{AgentName}' from Azure DevOps", podName);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogDebug(ex, "Could not unregister agent '{AgentName}' - it may not be registered yet", podName);
+                }
+
+                // Delete the error pod
+                await _kubernetesPodService.DeletePodAsync(podName, namespaceName);
+                _logger.LogInformation("Deleted error pod '{PodName}'. New pod will be created automatically if needed.", podName);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to cleanup error pod '{PodName}'", errorPod.Metadata.Name);
+            }
+        }
+    }
+
     private async Task CleanupIdleAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
     {
         // If TtlIdleSeconds is 0, remove agents immediately when no work is queued
@@ -357,6 +428,7 @@ public class AzureDevOpsPollingService : BackgroundService
                 // Only remove pod if agent is not running a job
                 var pod = pods.FirstOrDefault(p => p.Metadata.Name == idleAgent.Name);
                 bool agentIsBusy = jobRequests.Any(j => j.Result == null && j.AgentId == idleAgent.Id);
+
                 // Grace period: do not delete pod if it is less than 2 minutes old
                 if (pod != null && pod.Metadata.CreationTimestamp.HasValue &&
                     DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
@@ -364,6 +436,23 @@ public class AzureDevOpsPollingService : BackgroundService
                     _logger.LogInformation("Skipping deletion of pod '{PodName}' (idle cleanup) because it is in registration grace period", pod.Metadata.Name);
                     continue;
                 }
+
+                // Do not clean up pods that are still starting up (ContainerCreating, image pulling, etc.)
+                if (pod != null && pod.Status?.Phase == "Pending")
+                {
+                    var isStartingUp = pod.Status?.ContainerStatuses?.Any(cs =>
+                        cs.State?.Waiting?.Reason == "ContainerCreating" ||
+                        cs.State?.Waiting?.Reason == "PodInitializing" ||
+                        cs.State?.Waiting?.Reason == "ImagePullBackOff" ||
+                        cs.State?.Waiting?.Reason == "ErrImagePull") == true;
+
+                    if (isStartingUp)
+                    {
+                        _logger.LogInformation("Skipping deletion of pod '{PodName}' (idle cleanup) because it is still starting up", pod.Metadata.Name);
+                        continue;
+                    }
+                }
+
                 if (!agentIsBusy)
                 {
                     _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
@@ -633,26 +722,30 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private void UpdateEntityStatus(V1AzDORunnerEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Disconnected", string? lastError = null)
+    private async void UpdateEntityStatus(V1AzDORunnerEntity entity, List<Agent> azureAgents, List<V1Pod> pods, int queuedJobs, string connectionStatus = "Disconnected", string? lastError = null)
     {
         try
         {
-            // TODO: Implement custom resource retrieval using official Kubernetes client
-            // var freshEntity = _kubernetesClient.Get<V1AzDORunnerEntity>(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
-            var freshEntity = entity; // Temporary: use the passed entity instead of fetching fresh
+            // Get the latest version of the entity from Kubernetes
+            var freshEntity = await _statusService.GetRunnerPoolAsync(entity.Metadata.Name, entity.Metadata.NamespaceProperty ?? "default");
             if (freshEntity != null)
             {
                 // Filter to only count operator-managed agents for status
                 var operatorManagedAgents = azureAgents.Where(a => IsOperatorManagedAgent(a.Name, entity.Metadata.Name)).ToList();
 
-                var activePods = pods.Count(p => p.Status?.Phase == "Running" || p.Status?.Phase == "Pending");
+                var runningPods = pods.Count(p => p.Status?.Phase == "Running");
+                var pendingPods = pods.Count(p => p.Status?.Phase == "Pending");
+                var containerCreatingPods = pods.Count(p =>
+                    p.Status?.Phase == "Pending" &&
+                    p.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true);
+                var activePods = runningPods + pendingPods;
                 var availableAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle");
                 var offlineAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "offline");
 
                 freshEntity.Status.QueuedJobs = queuedJobs;
                 freshEntity.Status.RunningAgents = operatorManagedAgents.Count;
                 freshEntity.Status.LastPolled = DateTime.UtcNow;
-                freshEntity.Status.Active = connectionStatus == "Disconnected";
+                freshEntity.Status.Active = connectionStatus == "Connected";
                 freshEntity.Status.ConnectionStatus = connectionStatus;
                 freshEntity.Status.LastError = lastError;
                 freshEntity.Status.OrganizationName = _azureDevOpsService.ExtractOrganizationName(freshEntity.Spec.AzDoUrl);
@@ -663,12 +756,16 @@ public class AzureDevOpsPollingService : BackgroundService
 
                 if (connectionStatus == "Connected")
                 {
+                    var podStatusMessage = containerCreatingPods > 0
+                        ? $"{activePods} pods ({runningPods} running, {pendingPods} pending, {containerCreatingPods} starting)"
+                        : $"{activePods} pods ({runningPods} running, {pendingPods} pending)";
+
                     freshEntity.Status.Conditions.Add(new V1AzDORunnerEntity.StatusCondition
                     {
                         Type = "Ready",
                         Status = "True",
                         Reason = "Reconciled",
-                        Message = $"Pool has {operatorManagedAgents.Count} operator-managed agents ({availableAgents} available, {offlineAgents} offline), {activePods} active pods, {queuedJobs} queued jobs",
+                        Message = $"Pool has {operatorManagedAgents.Count} operator-managed agents ({availableAgents} available, {offlineAgents} offline), {podStatusMessage}, {queuedJobs} queued jobs",
                         LastTransitionTime = DateTime.UtcNow
                     });
                 }
@@ -684,10 +781,10 @@ public class AzureDevOpsPollingService : BackgroundService
                     });
                 }
 
-                // TODO: Implement custom resource status update using official Kubernetes client
-                // _kubernetesClient.UpdateStatus(freshEntity);
-                _logger.LogDebug("Would update RunnerPool status: {ConnectionStatus}, {AgentCount} agents, {QueuedJobs} queued jobs, {ActivePods} active pods (Status update temporarily disabled)",
-                    connectionStatus, azureAgents.Count, queuedJobs, activePods);
+                // Update the status using our status service
+                await _statusService.UpdateStatusAsync(freshEntity);
+                _logger.LogDebug("Updated RunnerPool status: {ConnectionStatus}, {AgentCount} agents, {QueuedJobs} queued jobs, {RunningPods} running pods, {PendingPods} pending pods",
+                    connectionStatus, azureAgents.Count, queuedJobs, runningPods, pendingPods);
             }
         }
         catch (Exception ex)

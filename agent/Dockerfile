@@ -15,6 +15,7 @@ RUN apt-get update && \
     libicu74 \
     ca-certificates \
     gnupg \
+    dos2unix \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
@@ -66,8 +67,9 @@ RUN apt-get autoremove -y && \
     rm -rf /tmp/* /var/tmp/* /usr/share/doc/* /usr/share/man/* /var/cache/debconf/*
 
 COPY start.sh /azp/start.sh
-RUN chmod +x /azp/start.sh
-RUN chmod +x /azp/*.sh
+RUN dos2unix /azp/start.sh && \
+    chmod +x /azp/start.sh && \
+    chmod +x /azp/*.sh
 
 RUN if [ -f /tmp/capabilities.txt ]; then \
     cp /tmp/capabilities.txt /azp/capabilities.txt && \

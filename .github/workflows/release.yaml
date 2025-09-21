@@ -2,7 +2,7 @@
 name: Release Helm Chart
 on:
   push:
-    tags: ["*"]
+    tags: ['*']
   workflow_dispatch:
 jobs:
   release:
@@ -22,22 +22,20 @@ jobs:
           helm package chart/azdo-runner-operator --destination packaged
       - name: Create Helm repo index
         run: |
-          helm repo index packaged --url https://${{ github.repository_owner }}.github.io/charts
-
+          helm repo index packaged \
+            --url https://${{ github.repository_owner }}.github.io/charts
       - name: Checkout GitHub Pages repo
         uses: actions/checkout@v4
         with:
           repository: ${{ github.repository_owner }}/${{ github.repository_owner }}.github.io
           token: ${{ secrets.GH_PAGES_TOKEN }}
           path: gh-pages
-
       - name: Copy packaged charts to gh-pages repo
         run: |
           mkdir -p gh-pages/charts
           cp -r packaged/* gh-pages/charts/
-
       - name: Commit and push charts to GitHub Pages
-        run: |
+        run: |-
           cd gh-pages
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
