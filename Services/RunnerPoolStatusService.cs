@@ -79,26 +79,16 @@ public class RunnerPoolStatusService : IRunnerPoolStatusService
             // Update only the status, preserve everything else
             currentEntity.Status = entity.Status;
 
-            // Prepare the status subresource update
-            var statusUpdate = new
-            {
-                status = currentEntity.Status
-            };
-
-            var json = JsonSerializer.Serialize(statusUpdate, new JsonSerializerOptions
-            {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
-            });
-
-            // Update the status subresource
-            await _kubernetesClient.CustomObjects.PatchNamespacedCustomObjectStatusAsync(
-                body: json,
+            // Use replace for the status subresource instead of patch
+            await _kubernetesClient.CustomObjects.ReplaceNamespacedCustomObjectStatusAsync(
+                body: currentEntity,
                 group: Group,
                 version: Version,
                 namespaceParameter: namespaceName,
                 plural: Plural,
-                name: name);
+                name: name,
+                dryRun: null,
+                fieldManager: "azdo-runner-operator");
 
             _logger.LogDebug("Successfully updated status for RunnerPool {Name} in namespace {Namespace}", name, namespaceName);
         }
