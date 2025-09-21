@@ -3,6 +3,7 @@ using AzDORunner.Services;
 using k8s;
 
 var builder = WebApplication.CreateBuilder(args);
+var kubernetesClientConfig = KubernetesClientConfiguration.BuildDefaultConfig();
 
 builder.Services
     .AddKubernetesOperator()
@@ -13,21 +14,9 @@ builder.Services
     })
     .RegisterComponents();
 
-// Register the official Kubernetes client
-builder.Services.AddSingleton<IKubernetes>(provider =>
-{
-    var config = KubernetesClientConfiguration.InClusterConfig();
-    return new Kubernetes(config);
-});
+builder.Services.AddSingleton<IKubernetes>(_ => new Kubernetes(kubernetesClientConfig));
 
 builder.Services.AddControllers(o => o.SuppressImplicitRequiredAttributeForNonNullableReferenceTypes = true);
-
-// Register the official Kubernetes client
-builder.Services.AddSingleton<IKubernetes>(provider =>
-{
-    var config = KubernetesClientConfiguration.InClusterConfig();
-    return new Kubernetes(config);
-});
 
 builder.Services.AddHttpClient<IAzureDevOpsService, AzureDevOpsService>();
 builder.Services.AddSingleton<KubernetesPodService>();
