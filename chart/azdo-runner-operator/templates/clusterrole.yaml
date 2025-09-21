@@ -34,3 +34,6 @@ rules:
   - apiGroups: [admissionregistration.k8s.io]
     resources: [mutatingwebhookconfigurations]
     verbs: [get, update, patch, create]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["create", "get", "list", "update", "delete", "patch", "watch"]
