@@ -201,7 +201,7 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
         if (!char.IsLetterOrDigit(name[0]) || !char.IsLetterOrDigit(name[^1]))
             return false;
 
-        return name.All(c => char.IsLower(c) && (char.IsLetterOrDigit(c) || c == '-'));
+        return name.All(c => (char.IsLetterOrDigit(c) && char.IsLower(c)) || c == '-');
     }
 
     private static bool IsValidStorageQuantity(string quantity)

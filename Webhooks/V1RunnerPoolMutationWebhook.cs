@@ -67,12 +67,6 @@ public class V1RunnerPoolMutationWebhook : MutationWebhook<V1AzDORunnerEntity>
 
         foreach (var pvc in entity.Spec.Pvcs)
         {
-            if (pvc.CreatePvc && string.IsNullOrWhiteSpace(pvc.StorageClass))
-            {
-                pvc.StorageClass = "default";
-                modified = true;
-            }
-
             if (pvc.CreatePvc && string.IsNullOrWhiteSpace(pvc.Storage))
             {
                 pvc.Storage = "1Gi";
@@ -144,12 +138,6 @@ public class V1RunnerPoolMutationWebhook : MutationWebhook<V1AzDORunnerEntity>
 
         foreach (var pvc in newEntity.Spec.Pvcs)
         {
-            if (pvc.CreatePvc && string.IsNullOrWhiteSpace(pvc.StorageClass))
-            {
-                pvc.StorageClass = "default";
-                modified = true;
-            }
-
             if (pvc.CreatePvc && string.IsNullOrWhiteSpace(pvc.Storage))
             {
                 pvc.Storage = "1Gi";
