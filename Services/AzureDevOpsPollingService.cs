@@ -407,12 +407,12 @@ public class AzureDevOpsPollingService : BackgroundService
         var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
         // Only remove agents that have been idle for the specified duration (except minimum agents and those running a job)
-        List<Agent> operatorOnlineIdleAgents = new();
+        List<Agent> operatorIdleAgents = new();
         if (ttlIdleSeconds > 0)
         {
             var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
-            operatorOnlineIdleAgents = azureAgents.Where(agent =>
-                agent.Status == "Online" &&
+            operatorIdleAgents = azureAgents.Where(agent =>
+                (agent.Status?.ToLower() == "online" || agent.Status?.ToLower() == "running") &&
                 IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
                 !minAgentNames.Contains(agent.Name) &&
                 (agent.LastActive == null || agent.LastActive < idleThreshold) &&
@@ -421,7 +421,7 @@ public class AzureDevOpsPollingService : BackgroundService
             ).ToList();
         }
 
-        foreach (var idleAgent in operatorOnlineIdleAgents)
+        foreach (var idleAgent in operatorIdleAgents)
         {
             try
             {
@@ -739,7 +739,7 @@ public class AzureDevOpsPollingService : BackgroundService
                     p.Status?.Phase == "Pending" &&
                     p.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true);
                 var activePods = runningPods + pendingPods;
-                var availableAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle");
+                var availableAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "online" || a.Status?.ToLower() == "idle" || a.Status?.ToLower() == "running");
                 var offlineAgents = operatorManagedAgents.Count(a => a.Status?.ToLower() == "offline");
 
                 freshEntity.Status.QueuedJobs = queuedJobs;
