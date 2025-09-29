@@ -1,4 +1,4 @@
-﻿using System.Text.Json;
+using System.Text.Json;
 using System.Text;
 using AzDORunner.Model.Domain;
 
@@ -346,7 +346,7 @@ public class AzureDevOpsService : IAzureDevOpsService
             var poolId = await GetPoolIdAsync(azDoUrl, poolName, pat);
             if (poolId == null)
             {
-                _logger.LogWarning("❌ Pool '{PoolName}' not found for agent listing", poolName);
+                _logger.LogWarning("Pool '{PoolName}' not found for agent listing", poolName);
                 return new List<Agent>();
             }
 
@@ -397,7 +397,7 @@ public class AzureDevOpsService : IAzureDevOpsService
     {
         try
         {
-            _logger.LogDebug("Unregistering agent '{AgentName}' from pool '{PoolName}'", agentName, poolName);
+            _logger.LogInformation("Starting unregistration of agent '{AgentName}' from pool '{PoolName}'", agentName, poolName);
 
             var poolId = await GetPoolIdAsync(azDoUrl, poolName, pat);
             if (poolId == null)
@@ -406,37 +406,50 @@ public class AzureDevOpsService : IAzureDevOpsService
                 return false;
             }
 
+            _logger.LogDebug("Found pool ID {PoolId} for pool '{PoolName}'", poolId, poolName);
+
             // First find the agent ID
             var agents = await GetPoolAgentsAsync(azDoUrl, poolName, pat);
+            _logger.LogDebug("Retrieved {AgentCount} agents from pool '{PoolName}'", agents.Count, poolName);
+
             var agent = agents.FirstOrDefault(a => a.Name == agentName);
             if (agent == null)
             {
-                _logger.LogWarning("Agent '{AgentName}' not found in pool '{PoolName}'", agentName, poolName);
+                _logger.LogWarning("Agent '{AgentName}' not found in pool '{PoolName}'. Available agents: [{AvailableAgents}]",
+                    agentName, poolName, string.Join(", ", agents.Select(a => a.Name)));
                 return false;
             }
 
+            _logger.LogInformation("Found agent '{AgentName}' with ID {AgentId} and status '{Status}' in pool '{PoolName}'",
+                agentName, agent.Id, agent.Status, poolName);
+
             // Unregister the agent
-            var request = new HttpRequestMessage(HttpMethod.Delete,
-                $"{azDoUrl.TrimEnd('/')}/_apis/distributedtask/pools/{poolId}/agents/{agent.Id}?api-version=7.0");
+            var deleteUrl = $"{azDoUrl.TrimEnd('/')}/_apis/distributedtask/pools/{poolId}/agents/{agent.Id}?api-version=7.0";
+            _logger.LogDebug("Sending DELETE request to: {DeleteUrl}", deleteUrl);
+
+            var request = new HttpRequestMessage(HttpMethod.Delete, deleteUrl);
             request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue(
                 "Basic", Convert.ToBase64String(Encoding.ASCII.GetBytes($":{pat}")));
 
             var response = await _httpClient.SendAsync(request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+
             if (response.IsSuccessStatusCode)
             {
-                _logger.LogInformation("Successfully unregistered agent '{AgentName}' from pool '{PoolName}'", agentName, poolName);
+                _logger.LogInformation("Successfully unregistered agent '{AgentName}' (ID: {AgentId}) from pool '{PoolName}'",
+                    agentName, agent.Id, poolName);
                 return true;
             }
             else
             {
-                _logger.LogError("Failed to unregister agent '{AgentName}' from pool '{PoolName}': {StatusCode}",
-                    agentName, poolName, response.StatusCode);
+                _logger.LogError("Failed to unregister agent '{AgentName}' from pool '{PoolName}': {StatusCode}. Response: {ResponseContent}",
+                    agentName, poolName, response.StatusCode, responseContent);
                 return false;
             }
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to unregister agent '{AgentName}' from pool '{PoolName}'", agentName, poolName);
+            _logger.LogError(ex, "Exception occurred while unregistering agent '{AgentName}' from pool '{PoolName}'", agentName, poolName);
             return false;
         }
     }

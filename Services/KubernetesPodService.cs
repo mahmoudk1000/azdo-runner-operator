@@ -1,4 +1,4 @@
-﻿using k8s.Models;
+using k8s.Models;
 using AzDORunner.Entities;
 using k8s;
 using static AzDORunner.Entities.V1AzDORunnerEntity;
@@ -320,31 +320,57 @@ public class KubernetesPodService
         }
     }
 
+    public async Task UpdatePodLabelsAsync(string podName, string namespaceName, Dictionary<string, string> labelsToUpdate)
+    {
+        try
+        {
+            // Get the current pod to retrieve existing labels
+            var currentPod = await _kubernetesClient.CoreV1.ReadNamespacedPodAsync(podName, namespaceName);
+
+            // Create a patch to update only the specified labels
+            var patch = new V1Patch(System.Text.Json.JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    labels = labelsToUpdate
+                }
+            }), V1Patch.PatchType.MergePatch);
+
+            await _kubernetesClient.CoreV1.PatchNamespacedPodAsync(patch, podName, namespaceName);
+            _logger.LogInformation("Updated labels for pod {PodName} in namespace {Namespace}: {Labels}",
+                podName, namespaceName, string.Join(", ", labelsToUpdate.Select(kv => $"{kv.Key}={kv.Value}")));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to update labels for pod {PodName} in namespace {Namespace}", podName, namespaceName);
+            throw;
+        }
+    }
+
     public Task DeleteCompletedPodsAsync(V1AzDORunnerEntity runnerPool)
     {
         var namespaceName = runnerPool.Metadata.NamespaceProperty ?? "default";
 
         try
         {
-            _logger.LogInformation("🧹 Deleting completed pods for RunnerPool {Name} (Succeeded and Failed phases)", runnerPool.Metadata.Name);
+            _logger.LogInformation("Deleting completed/error pods for RunnerPool {Name} (this method is for bulk cleanup - TTL logic is handled elsewhere)", runnerPool.Metadata.Name);
 
             // Get all pods for this runner pool
             var allPods = _kubernetesClient.CoreV1.ListNamespacedPod(namespaceName).Items;
 
-            // Filter completed pods that belong to this runner pool
-            // Equivalent to: kubectl delete pod --field-selector=status.phase==Succeeded,status.phase==Failed
+            // Filter completed pods that belong to this runner pool - include Error phase for immediate cleanup
             var completedPods = allPods.Where(pod =>
                 pod.Metadata.Labels?.ContainsKey("runner-pool") == true &&
                 pod.Metadata.Labels["runner-pool"] == runnerPool.Metadata.Name &&
-                (pod.Status?.Phase == "Succeeded" || pod.Status?.Phase == "Failed")).ToList();
-
-            var deletedCount = 0;
+                (pod.Status?.Phase == "Succeeded" ||
+                 pod.Status?.Phase == "Failed" ||
+                 pod.Status?.Phase == "Error")).ToList(); var deletedCount = 0;
             foreach (var pod in completedPods)
             {
                 try
                 {
                     _kubernetesClient.CoreV1.DeleteNamespacedPod(pod.Metadata.Name, namespaceName);
-                    _logger.LogInformation("Bulk deleted completed pod {PodName} (Phase: {Phase})",
+                    _logger.LogInformation("Immediately deleted completed pod {PodName} (Phase: {Phase})",
                         pod.Metadata.Name, pod.Status?.Phase);
                     deletedCount++;
                 }
@@ -356,7 +382,7 @@ public class KubernetesPodService
 
             if (deletedCount > 0)
             {
-                _logger.LogInformation("Bulk deleted {DeletedCount} completed pods for RunnerPool {Name}",
+                _logger.LogInformation("Immediately deleted {DeletedCount} completed pods for RunnerPool {Name}",
                     deletedCount, runnerPool.Metadata.Name);
             }
             else

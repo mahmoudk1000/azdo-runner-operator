@@ -155,40 +155,29 @@ public class AzureDevOpsPollingService : BackgroundService
             // 0. Clean up error pods immediately and retry if needed
             await CleanupErrorPodsAsync(entity, pat, allPods);
 
-            // 1. Clean up completed agents/pods
+            // 1. Clean up completed agents/pods (Failed/Completed pods are deleted immediately)
             await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
 
-            // 2. Ensure minimum agents are running
+            // 2. Clean up idle running agents based on TtlIdleSeconds configuration
+            await CleanupIdleAgentsAsync(entity, pat, azureAgents, allPods);
+
+            // 3. Ensure minimum agents are running
             await EnsureMinimumAgentsAsync(entity, pat);
 
-            // 2.1. Optimize minimum agents for required capabilities
+            // 4. Optimize minimum agents for required capabilities
             if (queuedJobs > 0)
             {
                 await OptimizeMinAgentsForCapabilitiesAsync(entity, pat);
             }
 
-            // 2.5. Ensure maximum agents limit is respected
+            // 5. Ensure maximum agents limit is respected
             await EnsureMaximumAgentsLimitAsync(entity, pat);
 
-            // 3. Clean up idle agents based on TtlIdleSeconds configuration
-            if (entity.Spec.TtlIdleSeconds == 0)
-            {
-                // For immediate cleanup mode (--once), only clean up when no work is queued
-                if (queuedJobs == 0)
-                {
-                    await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
-                }
-            }
-            else
-            {
-                // For continuous mode, clean up agents that have exceeded TtlIdleSeconds regardless of queue status
-                await CleanupIdleAgentsAsync(entity, pat, azureAgents, activePods);
-            }
-
-            // 4. Scale up if needed - but consider both Azure agents AND running pods
+            // 6. Scale up if needed - get fresh pod list after cleanup operations
             if (queuedJobs > 0)
             {
-                await ScaleUpForQueuedWorkAsync(entity, pat, queuedJobs, azureAgents, activePods.Count);
+                var freshActivePods = await _kubernetesPodService.GetActivePodsAsync(entity);
+                await ScaleUpForQueuedWorkAsync(entity, pat, queuedJobs, azureAgents, freshActivePods.Count);
             }
 
             // 5. Update status with successful connection
@@ -217,62 +206,114 @@ public class AzureDevOpsPollingService : BackgroundService
         // Get all job requests to check if any agent is running a job
         var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
+        // First, clean up job-request-id labels from running pods whose jobs have completed
+        await CleanupCompletedJobLabelsAsync(entity, allPods, jobRequests);
+
+        // Handle Succeeded and Failed pods based on TTL settings
         var completedPods = allPods.Where(pod =>
             pod.Status?.Phase == "Succeeded" ||
-            pod.Status?.Phase == "Failed" ||
-            pod.Status?.Phase == "Error").ToList();
+            pod.Status?.Phase == "Failed").ToList();
 
         foreach (var completedPod in completedPods)
         {
             try
             {
-                var podLabels = completedPod.Metadata.Labels ?? new Dictionary<string, string>();
-                podLabels.TryGetValue("job-request-id", out var jobRequestId);
                 var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == completedPod.Metadata.Name);
-                bool agentIsBusy = correspondingAgent != null && jobRequests.Any(j => j.Result == null && j.AgentId == correspondingAgent.Id);
 
-                // If pod has a job-request-id, only delete if the job is finished (Result != null)
-                if (!string.IsNullOrEmpty(jobRequestId))
+                // Double-check: Never delete a pod if agent still has an active job (safety check)
+                bool agentHasActiveJob = false;
+                if (correspondingAgent != null)
                 {
-                    var job = jobRequests.FirstOrDefault(j => j.RequestId.ToString() == jobRequestId);
-                    if (job != null && job.Result == null)
+                    var activeJob = jobRequests.FirstOrDefault(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+                    if (activeJob != null)
                     {
-                        _logger.LogInformation("Skipping deletion of pod '{PodName}' because its job-request-id {JobRequestId} is still running", completedPod.Metadata.Name, jobRequestId);
-                        continue;
+                        agentHasActiveJob = true;
                     }
                 }
 
-                // For pods without job-request-id, only delete if not busy and (if ttlIdleSeconds > 0) past idle threshold
-                if (string.IsNullOrEmpty(jobRequestId))
+                // Also check pod labels for job-request-id
+                if (!agentHasActiveJob && completedPod.Metadata.Labels != null && completedPod.Metadata.Labels.TryGetValue("job-request-id", out var jobRequestId) && !string.IsNullOrEmpty(jobRequestId))
                 {
-                    var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
-                    if (ttlIdleSeconds > 0 && completedPod.Metadata.CreationTimestamp.HasValue)
+                    var labelJob = jobRequests.FirstOrDefault(j => j.RequestId.ToString() == jobRequestId);
+                    if (labelJob != null && labelJob.Result == null)
                     {
-                        var idleThreshold = completedPod.Metadata.CreationTimestamp.Value.AddSeconds(ttlIdleSeconds);
-                        if (DateTime.UtcNow < idleThreshold)
+                        agentHasActiveJob = true;
+                    }
+                }
+
+                // CRITICAL: Skip if agent still has an active job (this should not happen for Failed/Succeeded pods, but safety first)
+                if (agentHasActiveJob)
+                {
+                    _logger.LogWarning("PROTECTED: Not cleaning up {Phase} pod '{PodName}' because agent still has an active job (this is unusual for a {Phase} pod)", completedPod.Status?.Phase, completedPod.Metadata.Name, completedPod.Status?.Phase);
+                    continue;
+                }
+
+                bool shouldCleanup = false;
+                string reason = "";
+                var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
+
+                if (ttlIdleSeconds == 0)
+                {
+                    // TTL = 0: Clean up completed pods immediately
+                    shouldCleanup = true;
+                    reason = $"TTL=0 (immediate cleanup after completion)";
+                }
+                else if (ttlIdleSeconds > 0 && completedPod.Metadata.CreationTimestamp.HasValue)
+                {
+                    // TTL > 0: Clean up after pod has existed for ttlIdleSeconds
+                    var ttlThreshold = completedPod.Metadata.CreationTimestamp.Value.AddSeconds(ttlIdleSeconds);
+                    if (DateTime.UtcNow > ttlThreshold)
+                    {
+                        shouldCleanup = true;
+                        reason = $"pod in {completedPod.Status?.Phase} state for more than {ttlIdleSeconds}s (created: {completedPod.Metadata.CreationTimestamp})";
+                    }
+                    else
+                    {
+                        var remainingTime = ttlThreshold - DateTime.UtcNow;
+                        _logger.LogDebug("Keeping {Phase} pod '{PodName}' for {RemainingSeconds}s more (TTL: {TtlIdleSeconds}s)",
+                            completedPod.Status?.Phase, completedPod.Metadata.Name, (int)remainingTime.TotalSeconds, ttlIdleSeconds);
+                    }
+                }
+
+                if (shouldCleanup)
+                {
+                    // Unregister the agent from Azure DevOps if it exists
+                    if (correspondingAgent != null)
+                    {
+                        bool isOperatorManaged = IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name);
+                        _logger.LogInformation("{Phase} agent '{AgentName}' - IsOperatorManaged: {IsOperatorManaged}, AgentId: {AgentId}, Status: {Status}",
+                            completedPod.Status?.Phase, correspondingAgent.Name, isOperatorManaged, correspondingAgent.Id, correspondingAgent.Status);
+
+                        if (isOperatorManaged)
                         {
-                            _logger.LogInformation("Skipping deletion of pod '{PodName}' because it is within ttlIdleSeconds grace period", completedPod.Metadata.Name);
-                            continue;
+                            _logger.LogInformation("Unregistering {Phase} agent '{AgentName}' (ID: {AgentId}) from Azure DevOps - {Reason}",
+                                completedPod.Status?.Phase, correspondingAgent.Name, correspondingAgent.Id, reason);
+
+                            var unregistered = await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
+
+                            if (unregistered)
+                            {
+                                _logger.LogInformation("Successfully unregistered {Phase} agent '{AgentName}' from Azure DevOps", completedPod.Status?.Phase, correspondingAgent.Name);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Failed to unregister {Phase} agent '{AgentName}' from Azure DevOps (but will still delete pod)", completedPod.Status?.Phase, correspondingAgent.Name);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Skipping Azure DevOps unregistration for {Phase} agent '{AgentName}' - not operator managed", completedPod.Status?.Phase, correspondingAgent.Name);
                         }
                     }
-                }
+                    else
+                    {
+                        _logger.LogInformation("No corresponding Azure DevOps agent found for {Phase} pod '{PodName}' - proceeding with pod deletion only", completedPod.Status?.Phase, completedPod.Metadata.Name);
+                    }
 
-                if (correspondingAgent != null && IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name) && !agentIsBusy)
-                {
-                    _logger.LogInformation("Cleaning up agent '{AgentName}' for completed pod", correspondingAgent.Name);
-                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
-                }
-
-                // Only delete pod if agent is not busy
-                if (!agentIsBusy)
-                {
+                    // Delete the pod
                     await _kubernetesPodService.DeletePodAsync(completedPod.Metadata.Name,
                         entity.Metadata.NamespaceProperty ?? "default");
-                    _logger.LogInformation("Deleted completed pod '{PodName}'", completedPod.Metadata.Name);
-                }
-                else
-                {
-                    _logger.LogInformation("Skipping deletion of completed pod '{PodName}' because agent is still running a job", completedPod.Metadata.Name);
+                    _logger.LogInformation("Deleted {Phase} pod '{PodName}' after TTL - {Reason}", completedPod.Status?.Phase, completedPod.Metadata.Name, reason);
                 }
             }
             catch (Exception ex)
@@ -328,19 +369,64 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
+    private async Task CleanupCompletedJobLabelsAsync(V1AzDORunnerEntity entity, List<V1Pod> allPods, List<JobRequest> jobRequests)
+    {
+        // Find running pods that have job-request-id labels for completed jobs
+        var runningPodsWithJobLabels = allPods.Where(pod =>
+            pod.Status?.Phase == "Running" &&
+            pod.Metadata.Labels != null &&
+            pod.Metadata.Labels.ContainsKey("job-request-id")).ToList();
+
+        foreach (var pod in runningPodsWithJobLabels)
+        {
+            try
+            {
+                var jobRequestId = pod.Metadata.Labels["job-request-id"];
+                var job = jobRequests.FirstOrDefault(j => j.RequestId.ToString() == jobRequestId);
+
+                // If job is completed (has a Result), clear the job-request-id label to make agent reusable
+                if (job != null && job.Result != null)
+                {
+                    await _kubernetesPodService.UpdatePodLabelsAsync(pod.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default",
+                        new Dictionary<string, string> { { "job-request-id", "" } });
+
+                    _logger.LogInformation("Cleared job-request-id label from pod '{PodName}' as job {JobRequestId} completed with result: {Result}",
+                        pod.Metadata.Name, jobRequestId, job.Result);
+                }
+                // If job no longer exists (was deleted), also clear the label
+                else if (job == null)
+                {
+                    await _kubernetesPodService.UpdatePodLabelsAsync(pod.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default",
+                        new Dictionary<string, string> { { "job-request-id", "" } });
+
+                    _logger.LogInformation("Cleared job-request-id label from pod '{PodName}' as job {JobRequestId} no longer exists",
+                        pod.Metadata.Name, jobRequestId);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to cleanup job label for pod '{PodName}'", pod.Metadata.Name);
+            }
+        }
+    }
+
     private async Task CleanupErrorPodsAsync(V1AzDORunnerEntity entity, string pat, List<V1Pod> allPods)
     {
-        // Find pods with Error status or stuck in ContainerCreating for too long
+        // Find pods with Error status or stuck in problematic states (IMMEDIATELY clean up these)
         var errorPods = allPods.Where(pod =>
             pod.Status?.Phase == "Error" ||
             (pod.Status?.Phase == "Pending" &&
              pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ImagePullBackOff" ||
                                                      cs.State?.Waiting?.Reason == "ErrImagePull" ||
-                                                     cs.State?.Waiting?.Reason == "CrashLoopBackOff") == true) ||
-            // Check for pods stuck in ContainerCreating for more than 10 minutes
+                                                     cs.State?.Waiting?.Reason == "CrashLoopBackOff" ||
+                                                     cs.State?.Waiting?.Reason == "InvalidImageName" ||
+                                                     cs.State?.Waiting?.Reason == "ImageInspectError") == true) ||
+            // Only consider ContainerCreating as stuck if it's been more than 15 minutes (increased tolerance)
             (pod.Status?.Phase == "Pending" &&
              pod.Metadata.CreationTimestamp.HasValue &&
-             DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value > TimeSpan.FromMinutes(10) &&
+             DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value > TimeSpan.FromMinutes(15) &&
              pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true)).ToList();
 
         foreach (var errorPod in errorPods)
@@ -350,7 +436,7 @@ public class AzureDevOpsPollingService : BackgroundService
                 var podName = errorPod.Metadata.Name;
                 var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
 
-                _logger.LogWarning("Found error pod '{PodName}' with status '{Phase}'. Deleting and will retry creation.",
+                _logger.LogWarning("Found error pod '{PodName}' with status '{Phase}'. Deleting immediately (error states ignore TTL).",
                     podName, errorPod.Status?.Phase);
 
                 // Log container status details for debugging
@@ -395,9 +481,8 @@ public class AzureDevOpsPollingService : BackgroundService
 
     private async Task CleanupIdleAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
     {
-        // If TtlIdleSeconds is 0, remove agents immediately when no work is queued
-        // If TtlIdleSeconds > 0, only remove agents that have been idle for that many seconds
         var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
+        var queuedJobs = await _azureDevOpsService.GetQueuedJobsCountAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
         // Get minimum agent pods to protect them from cleanup
         var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
@@ -406,73 +491,159 @@ public class AzureDevOpsPollingService : BackgroundService
         // Fetch all job requests for the pool to determine if an agent is running a job
         var jobRequests = await _azureDevOpsService.GetJobRequestsAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, pat);
 
-        // Only remove agents that have been idle for the specified duration (except minimum agents and those running a job)
-        List<Agent> operatorIdleAgents = new();
-        if (ttlIdleSeconds > 0)
-        {
-            var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
-            operatorIdleAgents = azureAgents.Where(agent =>
-                (agent.Status?.ToLower() == "online" || agent.Status?.ToLower() == "running") &&
-                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
-                !minAgentNames.Contains(agent.Name) &&
-                (agent.LastActive == null || agent.LastActive < idleThreshold) &&
-                // Do not remove if agent is running a job
-                !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
-            ).ToList();
-        }
+        // Get running pods that are not minimum agents
+        var runningPods = pods.Where(pod => pod.Status?.Phase == "Running").ToList();
 
-        foreach (var idleAgent in operatorIdleAgents)
+        foreach (var pod in runningPods)
         {
             try
             {
-                // Only remove pod if agent is not running a job
-                var pod = pods.FirstOrDefault(p => p.Metadata.Name == idleAgent.Name);
-                bool agentIsBusy = jobRequests.Any(j => j.Result == null && j.AgentId == idleAgent.Id);
-
-                // Grace period: do not delete pod if it is less than 2 minutes old
-                if (pod != null && pod.Metadata.CreationTimestamp.HasValue &&
-                    DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
+                // Skip minimum agents
+                if (minAgentNames.Contains(pod.Metadata.Name))
                 {
-                    _logger.LogInformation("Skipping deletion of pod '{PodName}' (idle cleanup) because it is in registration grace period", pod.Metadata.Name);
+                    _logger.LogDebug("Skipping cleanup of minimum agent '{PodName}'", pod.Metadata.Name);
                     continue;
                 }
 
-                // Do not clean up pods that are still starting up (ContainerCreating, image pulling, etc.)
-                if (pod != null && pod.Status?.Phase == "Pending")
+                // Grace period: do not delete pod if it is less than 2 minutes old (allow time for registration)
+                if (pod.Metadata.CreationTimestamp.HasValue &&
+                    DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value < TimeSpan.FromMinutes(2))
                 {
-                    var isStartingUp = pod.Status?.ContainerStatuses?.Any(cs =>
-                        cs.State?.Waiting?.Reason == "ContainerCreating" ||
-                        cs.State?.Waiting?.Reason == "PodInitializing" ||
-                        cs.State?.Waiting?.Reason == "ImagePullBackOff" ||
-                        cs.State?.Waiting?.Reason == "ErrImagePull") == true;
+                    _logger.LogDebug("Skipping deletion of pod '{PodName}' because it is in registration grace period", pod.Metadata.Name);
+                    continue;
+                }
 
-                    if (isStartingUp)
+                var correspondingAgent = azureAgents.FirstOrDefault(agent => agent.Name == pod.Metadata.Name);
+
+                // Check if agent has an active job by multiple methods
+                bool agentHasActiveJob = false;
+                string jobCheckReason = "";
+
+                // Method 1: Check if agent is assigned to an incomplete job in Azure DevOps
+                if (correspondingAgent != null)
+                {
+                    var activeJob = jobRequests.FirstOrDefault(j => j.Result == null && j.AgentId == correspondingAgent.Id);
+                    if (activeJob != null)
                     {
-                        _logger.LogInformation("Skipping deletion of pod '{PodName}' (idle cleanup) because it is still starting up", pod.Metadata.Name);
-                        continue;
+                        agentHasActiveJob = true;
+                        jobCheckReason = $"agent {correspondingAgent.Id} assigned to active job {activeJob.RequestId}";
                     }
                 }
 
-                if (!agentIsBusy)
+                // Method 2: Check if pod has job-request-id label for an active job
+                if (!agentHasActiveJob && pod.Metadata.Labels != null && pod.Metadata.Labels.TryGetValue("job-request-id", out var jobRequestId) && !string.IsNullOrEmpty(jobRequestId))
                 {
-                    _logger.LogInformation("Cleaning up idle agent '{AgentName}' - no queued work (TtlIdleSeconds: {TtlIdleSeconds})",
-                        idleAgent.Name, ttlIdleSeconds);
-                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, idleAgent.Name, pat);
-
-                    if (pod != null)
+                    var labelJob = jobRequests.FirstOrDefault(j => j.RequestId.ToString() == jobRequestId);
+                    if (labelJob != null && labelJob.Result == null)
                     {
-                        await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name,
-                            entity.Metadata.NamespaceProperty ?? "default");
+                        agentHasActiveJob = true;
+                        jobCheckReason = $"pod has job-request-id label {jobRequestId} for active job";
                     }
                 }
-                else
+
+                // NEVER kill an agent that has an active job
+                if (agentHasActiveJob)
                 {
-                    _logger.LogInformation("Skipping cleanup of idle agent '{AgentName}' because it is running a job", idleAgent.Name);
+                    _logger.LogInformation("PROTECTED: Not cleaning up agent '{AgentName}' because it has an active job - {JobCheckReason}", pod.Metadata.Name, jobCheckReason);
+                    continue;
+                }
+
+                bool shouldCleanup = false;
+                string reason = "";
+
+                if (ttlIdleSeconds == 0)
+                {
+                    // TTL = 0: Clean up immediately when no jobs are queued
+                    if (queuedJobs == 0)
+                    {
+                        shouldCleanup = true;
+                        reason = "no queued jobs and TTL=0 (immediate cleanup)";
+                    }
+                }
+                else if (ttlIdleSeconds > 0)
+                {
+                    // TTL > 0: Clean up after agent has been idle for ttlIdleSeconds
+                    // Use agent's LastActive time if available (more accurate than pod creation)
+                    if (correspondingAgent?.LastActive != null)
+                    {
+                        var idleThreshold = correspondingAgent.LastActive.Value.AddSeconds(ttlIdleSeconds);
+                        if (DateTime.UtcNow > idleThreshold)
+                        {
+                            shouldCleanup = true;
+                            reason = $"agent idle for more than {ttlIdleSeconds}s (last active: {correspondingAgent.LastActive})";
+                        }
+                        else
+                        {
+                            var remainingTime = idleThreshold - DateTime.UtcNow;
+                            _logger.LogDebug("Keeping idle agent '{AgentName}' for {RemainingSeconds}s more (TTL: {TtlIdleSeconds}s, last active: {LastActive})",
+                                pod.Metadata.Name, (int)remainingTime.TotalSeconds, ttlIdleSeconds, correspondingAgent.LastActive);
+                        }
+                    }
+                    else if (pod.Metadata.CreationTimestamp.HasValue)
+                    {
+                        // Fallback: Use pod creation time if no LastActive available
+                        var idleThreshold = pod.Metadata.CreationTimestamp.Value.AddSeconds(ttlIdleSeconds);
+                        if (DateTime.UtcNow > idleThreshold)
+                        {
+                            shouldCleanup = true;
+                            reason = $"pod created more than {ttlIdleSeconds}s ago and agent has no LastActive time";
+                        }
+                        else
+                        {
+                            var remainingTime = idleThreshold - DateTime.UtcNow;
+                            _logger.LogDebug("Keeping agent '{AgentName}' for {RemainingSeconds}s more (TTL: {TtlIdleSeconds}s, created: {CreationTime})",
+                                pod.Metadata.Name, (int)remainingTime.TotalSeconds, ttlIdleSeconds, pod.Metadata.CreationTimestamp);
+                        }
+                    }
+                }
+
+                if (shouldCleanup)
+                {
+                    _logger.LogInformation("Cleaning up idle agent '{AgentName}' - {Reason}", pod.Metadata.Name, reason);
+
+                    // Unregister from Azure DevOps first
+                    if (correspondingAgent != null)
+                    {
+                        bool isOperatorManaged = IsOperatorManagedAgent(correspondingAgent.Name, entity.Metadata.Name);
+                        _logger.LogInformation("Agent '{AgentName}' - IsOperatorManaged: {IsOperatorManaged}, AgentId: {AgentId}, Status: {Status}",
+                            correspondingAgent.Name, isOperatorManaged, correspondingAgent.Id, correspondingAgent.Status);
+
+                        if (isOperatorManaged)
+                        {
+                            _logger.LogInformation("Unregistering agent '{AgentName}' (ID: {AgentId}) from Azure DevOps pool '{Pool}'",
+                                correspondingAgent.Name, correspondingAgent.Id, entity.Spec.Pool);
+
+                            var unregistered = await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, correspondingAgent.Name, pat);
+
+                            if (unregistered)
+                            {
+                                _logger.LogInformation("Successfully unregistered agent '{AgentName}' from Azure DevOps", correspondingAgent.Name);
+                            }
+                            else
+                            {
+                                _logger.LogWarning("Failed to unregister agent '{AgentName}' from Azure DevOps (but will still delete pod)", correspondingAgent.Name);
+                            }
+                        }
+                        else
+                        {
+                            _logger.LogWarning("Skipping Azure DevOps unregistration for agent '{AgentName}' - not operator managed", correspondingAgent.Name);
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogInformation("No corresponding Azure DevOps agent found for pod '{PodName}' - proceeding with pod deletion only", pod.Metadata.Name);
+                    }
+
+                    // Delete the pod
+                    await _kubernetesPodService.DeletePodAsync(pod.Metadata.Name,
+                        entity.Metadata.NamespaceProperty ?? "default");
+
+                    _logger.LogInformation("Successfully cleaned up idle agent pod '{AgentName}'", pod.Metadata.Name);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to cleanup idle agent '{AgentName}'", idleAgent.Name);
+                _logger.LogError(ex, "Failed to cleanup idle agent/pod '{PodName}'", pod.Metadata.Name);
             }
         }
     }
@@ -489,7 +660,7 @@ public class AzureDevOpsPollingService : BackgroundService
         var allPods = await _kubernetesPodService.GetAllRunnerPodsAsync(entity);
         var totalAgentCount = operatorManagedAgents.Count + allPods.Count;
 
-        // For every queued job not assigned to an agent or pod, spawn a new agent (up to MaxAgents)
+        // For every queued job not assigned to an agent or pod, try to reuse existing idle agents first
         var jobsWithoutAgentOrPod = jobRequests.Where(j =>
             (j.Result == null || (j.Result != null && j.Result.ToLower() == "inprogress")) &&
             !operatorManagedAgents.Any(a => a.Id == j.AgentId) &&
@@ -498,8 +669,20 @@ public class AzureDevOpsPollingService : BackgroundService
                 pod.Metadata.Labels.TryGetValue("job-request-id", out var val) &&
                 val == j.RequestId.ToString())
         ).ToList();
+
+        // Try to reuse idle agents first before creating new ones
+        var jobsToSpawn = new List<JobRequest>();
+        foreach (var job in jobsWithoutAgentOrPod)
+        {
+            var reusedAgent = await TryReuseIdleAgentAsync(entity, pat, job, operatorManagedAgents, allPods, jobRequests);
+            if (!reusedAgent)
+            {
+                jobsToSpawn.Add(job);
+            }
+        }
+
         var availableSlots = entity.Spec.MaxAgents - totalAgentCount;
-        var jobsToSpawn = jobsWithoutAgentOrPod.Take(availableSlots).ToList();
+        jobsToSpawn = jobsToSpawn.Take(availableSlots).ToList();
 
         if (jobsToSpawn.Count > 0)
         {
@@ -531,9 +714,13 @@ public class AzureDevOpsPollingService : BackgroundService
 
             _logger.LogInformation("Created {NeededAgents} agent pods for pending work", jobsToSpawn.Count);
         }
-        else
+        else if (jobsWithoutAgentOrPod.Count == 0)
         {
             _logger.LogInformation("No new agents needed: all queued jobs are already assigned to agents or pods are starting up.");
+        }
+        else
+        {
+            _logger.LogInformation("All {JobCount} unassigned jobs were handled by reusing idle agents.", jobsWithoutAgentOrPod.Count);
         }
     }
 
@@ -568,6 +755,92 @@ public class AzureDevOpsPollingService : BackgroundService
                 var agentIndex = _kubernetesPodService.GetNextAvailableAgentIndex(entity);
                 await _kubernetesPodService.CreateAgentPodAsync(entity, pat, agentIndex);
             }
+        }
+    }
+
+    private async Task<bool> TryReuseIdleAgentAsync(V1AzDORunnerEntity entity, string pat, JobRequest job, List<Agent> operatorManagedAgents, List<V1Pod> allPods, List<JobRequest> jobRequests)
+    {
+        try
+        {
+            // Only try to reuse agents if TtlIdleSeconds > 0 (reuse is only meaningful with a grace period)
+            if (entity.Spec.TtlIdleSeconds <= 0)
+            {
+                return false;
+            }
+
+            var ttlIdleSeconds = entity.Spec.TtlIdleSeconds;
+            var idleThreshold = DateTime.UtcNow.AddSeconds(-ttlIdleSeconds);
+
+            // Get minimum agent pods to protect them from being reassigned
+            var minAgentPods = await _kubernetesPodService.GetMinAgentPodsAsync(entity);
+            var minAgentNames = minAgentPods.Select(pod => pod.Metadata.Name).ToHashSet();
+
+            // Find idle agents that are eligible for reuse
+            var eligibleIdleAgents = operatorManagedAgents.Where(agent =>
+                // Agent must be online or running (but not busy)
+                (agent.Status?.ToLower() == "online" || agent.Status?.ToLower() == "running") &&
+                IsOperatorManagedAgent(agent.Name, entity.Metadata.Name) &&
+                // Don't reuse minimum agents
+                !minAgentNames.Contains(agent.Name) &&
+                // Agent must be within the idle time window (not yet expired)
+                (agent.LastActive == null || agent.LastActive > idleThreshold) &&
+                // Agent must not be running a job
+                !jobRequests.Any(j => j.Result == null && j.AgentId == agent.Id)
+            ).ToList();
+
+            // Find the corresponding pods for these agents that are truly idle (no active job-request-id)
+            var eligibleIdlePods = allPods.Where(pod =>
+                pod.Status?.Phase == "Running" &&
+                eligibleIdleAgents.Any(agent => agent.Name == pod.Metadata.Name) &&
+                // Pod must not have an active job-request-id (or have an empty one)
+                (pod.Metadata.Labels?.TryGetValue("job-request-id", out var jobId) != true || string.IsNullOrEmpty(jobId))
+            ).ToList();
+
+            // Determine required capability for the job
+            string requiredCapability = "base";
+            if (entity.Spec.CapabilityAware && job.Demands != null && entity.Spec.CapabilityImages != null)
+            {
+                var matched = job.Demands.FirstOrDefault(d => entity.Spec.CapabilityImages.ContainsKey(d));
+                if (!string.IsNullOrEmpty(matched))
+                {
+                    requiredCapability = matched;
+                }
+            }
+
+            // Find a pod that matches the required capability and is truly idle
+            V1Pod? reusablePod = null;
+            if (entity.Spec.CapabilityAware)
+            {
+                reusablePod = eligibleIdlePods.FirstOrDefault(pod =>
+                    pod.Metadata.Labels != null &&
+                    pod.Metadata.Labels.TryGetValue("capability", out var capability) &&
+                    capability == requiredCapability);
+            }
+            else
+            {
+                // If not capability-aware, any eligible idle pod can be reused
+                reusablePod = eligibleIdlePods.FirstOrDefault();
+            }
+
+            if (reusablePod != null)
+            {
+                // Update the pod's job-request-id label to the new job
+                await _kubernetesPodService.UpdatePodLabelsAsync(reusablePod.Metadata.Name,
+                    entity.Metadata.NamespaceProperty ?? "default",
+                    new Dictionary<string, string> { { "job-request-id", job.RequestId.ToString() } });
+
+                _logger.LogInformation("Reused idle agent '{AgentName}' for job {JobRequestId} with capability '{Capability}'",
+                    reusablePod.Metadata.Name, job.RequestId, requiredCapability);
+
+                return true;
+            }
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to reuse idle agent for job {JobRequestId}", job.RequestId);
+            return false;
         }
     }
 
@@ -802,6 +1075,14 @@ public class AzureDevOpsPollingService : BackgroundService
         }
 
         var suffix = agentName.Substring(expectedPrefix.Length);
+
+        // Check if suffix is a numeric index (e.g., "0", "1", "2", etc.)
+        if (int.TryParse(suffix, out var index) && index >= 0)
+        {
+            return true;
+        }
+
+        // Also support 8-character alphanumeric suffixes for backward compatibility
         return suffix.Length == 8 && suffix.All(c => char.IsLetterOrDigit(c));
     }
 
