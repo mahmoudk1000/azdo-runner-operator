@@ -40,25 +40,30 @@ spec:
 ## Features
 
 ### 🚀 Intelligent Agent Management
+
 - **Indexed Agents**: StatefulSet-like naming (`agent-0`, `agent-1`) without StatefulSet complexity
 - **Auto-Scaling**: Dynamic scaling based on Azure DevOps queue demand
 - **Min/Max Limits**: Configurable agent count boundaries
 - **TTL Management**: Automatic cleanup of idle agents
 
 ### 💾 Persistent Storage
+
 - **PVC Support**: Attach persistent volumes to agents
 - **Flexible Lifecycle**: Choose to preserve or delete storage with agents
 - **Storage Reuse**: Agents automatically reconnect to existing storage
 - **Multiple Volumes**: Support for multiple PVCs per agent
 
 ### 🔧 Environment Customization
+
 - **Extra Environment Variables**: Inject custom env vars into agents
 - **Secret References**: Support for both direct values and Kubernetes secrets
 - **Capability-Aware Scheduling**: Route jobs to specialized agents
 
 ### 🔒 Security & Reliability
+
 - **Admission Webhooks**: Validate and mutate resources on creation/update
 - **Auto Certificate Rotation**: Seamless webhook certificate management
+- **Certificate Trust Store**: Mount custom CA certificates and TLS secrets
 - **Health Monitoring**: Continuous agent health checking
 
 ## Configuration Reference
@@ -67,13 +72,14 @@ spec:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `azDoUrl` | string | ✅ | Azure DevOps organization URL |
-| `pool` | string | ✅ | Azure DevOps agent pool name |
-| `patSecretName` | string | ✅ | Kubernetes secret containing PAT |
-| `image` | string | ✅ | Container image for agents |
-| `maxAgents` | int | ❌ | Maximum number of agents (default: 10) |
-| `minAgents` | int | ❌ | Minimum number of agents (default: 0) |
-| `ttlIdleSeconds` | int | ❌ | Seconds before idle agents are removed (default: 0) |
+| `azDoUrl` | string | true | Azure DevOps organization URL |
+| `pool` | string | true | Azure DevOps agent pool name |
+| `patSecretName` | string | true | Kubernetes secret containing PAT |
+| `image` | string | true | Container image for agents |
+| `maxAgents` | int | false | Maximum number of agents (default: 10) |
+| `minAgents` | int | false | Minimum number of agents (default: 0) |
+| `ttlIdleSeconds` | int | false | Seconds before idle agents are removed (default: 0) |
+| `certTrustStore` | array | false | List of TLS secrets to mount as trusted certificates |
 
 ### Environment Variables
 
@@ -123,6 +129,41 @@ spec:
 | `optional` | bool | Continue if PVC creation fails |
 | `deleteWithAgent` | bool | Delete PVC when agent is removed |
 
+### Certificate Trust Store
+
+Mount custom CA certificates and TLS secrets into agent pods:
+
+```yaml
+spec:
+  certTrustStore:
+    - secretName: my-ca-cert
+    - secretName: company-root-ca
+    - secretName: proxy-cert
+```
+
+Certificates are mounted at `/etc/ssl/certs/{secretName}` as read-only volumes.
+
+#### Use Cases
+
+- Corporate CA certificates for internal services
+- Proxy certificates for firewall environments
+- Custom root CAs for private certificate authorities
+- Client certificates for mutual TLS authentication
+
+#### Creating Certificate Secrets
+
+```bash
+# Create from certificate files
+kubectl create secret generic my-ca-cert \
+  --from-file=tls.crt=/path/to/ca-certificate.crt \
+  --from-file=tls.key=/path/to/ca-certificate.key
+
+# Create TLS secret
+kubectl create secret tls company-root-ca \
+  --cert=/path/to/company-root-ca.crt \
+  --key=/path/to/company-root-ca.key
+```
+
 ### Capability-Aware Agents
 
 Route specific jobs to specialized agents:
@@ -162,6 +203,28 @@ spec:
   maxAgents: 3
 ```
 
+### Runner Pool with Custom Certificates
+
+```yaml
+apiVersion: devops.opentools.mf/v1
+kind: RunnerPool
+metadata:
+  name: corporate-runners
+spec:
+  azDoUrl: https://dev.azure.com/my-org
+  pool: secure-pool
+  patSecretName: pat-token
+  image: ghcr.io/mahmoudk1000/azdo-runner-operator/agent:main
+  maxAgents: 5
+  minAgents: 1
+  certTrustStore:
+    - secretName: corporate-ca-bundle
+    - secretName: proxy-certificates
+  extraEnv:
+    - name: SSL_CERT_DIR
+      value: "/etc/ssl/certs"
+```
+
 ### Advanced Configuration
 
 ```yaml
@@ -181,6 +244,10 @@ spec:
   capabilityImages:
     docker: my-registry/agent:docker
     kubernetes: my-registry/agent:k8s
+  certTrustStore:
+    - secretName: corporate-ca
+    - secretName: proxy-cert
+    - secretName: internal-root-ca
   extraEnv:
     - name: BUILD_ENVIRONMENT
       value: production
@@ -228,16 +295,26 @@ kubectl describe runnerpool advanced-runners
 ### Common Issues
 
 **Agents not starting:**
+
 - Verify PAT secret exists and is valid
 - Check image pull policy and registry access
 - Review agent pod logs: `kubectl logs -l app=azdo-runner`
 
 **Storage issues:**
+
 - Ensure storage class exists
 - Check PVC creation permissions
 - Verify storage quotas
 
+**Certificate trust store issues:**
+
+- Verify certificate secrets exist in the correct namespace
+- Check secret contains valid certificate data
+- Ensure agent image supports certificate installation
+- Review agent logs for SSL/TLS connection errors
+
 **Webhook errors:**
+
 - Check operator logs for certificate issues
 - Verify webhook service is running
 - Ensure proper RBAC permissions
