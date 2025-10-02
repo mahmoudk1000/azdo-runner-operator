@@ -8,25 +8,25 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 {
     public override ValidationResult Create(V1AzDORunnerEntity entity, bool dryRun)
     {
-        // Only require absolutely essential fields
         if (string.IsNullOrWhiteSpace(entity.Spec.AzDoUrl))
             return Fail("AzDoUrl is required and cannot be empty", 422);
 
         if (string.IsNullOrWhiteSpace(entity.Spec.PatSecretName))
             return Fail("PatSecretName is required and cannot be empty", 422);
 
-        // Smart validation - validate business logic for provided fields
         var result = ValidateBusinessLogic(entity);
         if (result != null)
             return result;
 
-        // Validate ExtraEnv fields (only if provided)
         result = ValidateExtraEnv(entity.Spec.ExtraEnv);
         if (result != null)
             return result;
 
-        // Validate PVC fields (smart conditional validation)
         result = ValidatePvcs(entity.Spec.Pvcs);
+        if (result != null)
+            return result;
+
+        result = ValidateCertTrustStore(entity.Spec.CertTrustStore);
         if (result != null)
             return result;
 
@@ -35,25 +35,25 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 
     public override ValidationResult Update(V1AzDORunnerEntity oldEntity, V1AzDORunnerEntity newEntity, bool dryRun)
     {
-        // Only require absolutely essential fields
         if (string.IsNullOrWhiteSpace(newEntity.Spec.AzDoUrl))
             return Fail("AzDoUrl is required and cannot be empty");
 
         if (string.IsNullOrWhiteSpace(newEntity.Spec.PatSecretName))
             return Fail("PatSecretName is required and cannot be empty");
 
-        // Smart validation - validate business logic for provided fields
         var result = ValidateBusinessLogic(newEntity);
         if (result != null)
             return result;
 
-        // Validate ExtraEnv fields (only if provided)
         result = ValidateExtraEnv(newEntity.Spec.ExtraEnv);
         if (result != null)
             return result;
 
-        // Validate PVC fields (smart conditional validation)
         result = ValidatePvcs(newEntity.Spec.Pvcs);
+        if (result != null)
+            return result;
+
+        result = ValidateCertTrustStore(newEntity.Spec.CertTrustStore);
         if (result != null)
             return result;
 
@@ -62,7 +62,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 
     private ValidationResult? ValidateBusinessLogic(V1AzDORunnerEntity entity)
     {
-        // Validate AzDoUrl if provided (mutation webhook will set default if null)
         if (!string.IsNullOrWhiteSpace(entity.Spec.AzDoUrl))
         {
             if (!Uri.TryCreate(entity.Spec.AzDoUrl, UriKind.Absolute, out var uri) ||
@@ -70,14 +69,12 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
                 return Fail("AzDoUrl must be a valid HTTP or HTTPS URL", 422);
         }
 
-        // Validate Image if provided (mutation webhook will set default if null)
         if (!string.IsNullOrWhiteSpace(entity.Spec.Image))
         {
             if (entity.Spec.Image.Contains(" ") || entity.Spec.Image.Contains("\t"))
                 return Fail("Image cannot contain spaces or tabs", 422);
         }
 
-        // Validate ImagePullPolicy if provided
         if (!string.IsNullOrWhiteSpace(entity.Spec.ImagePullPolicy))
         {
             var validImagePullPolicies = new[] { "Always", "IfNotPresent", "Never" };
@@ -85,7 +82,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
                 return Fail($"ImagePullPolicy must be one of: {string.Join(", ", validImagePullPolicies)}", 422);
         }
 
-        // Validate numeric values (mutation webhook will set defaults if null)
         if (entity.Spec.TtlIdleSeconds < 0)
             return Fail("TtlIdleSeconds must be a non-negative value", 422);
 
@@ -136,7 +132,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 
         foreach (var pvc in pvcs)
         {
-            // Only require Name - this is the basic identifier
             if (string.IsNullOrWhiteSpace(pvc.Name))
                 return Fail("PVC entries must have a non-empty Name", 422);
 
@@ -146,7 +141,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
             if (!IsValidKubernetesName(pvc.Name))
                 return Fail($"Invalid PVC name '{pvc.Name}'. Must be a valid Kubernetes name (lowercase alphanumeric characters or '-', and must start and end with an alphanumeric character)", 422);
 
-            // Smart conditional validation: If PVC is specified, MountPath is required
             if (string.IsNullOrWhiteSpace(pvc.MountPath))
                 return Fail($"PVC '{pvc.Name}' must have a MountPath specified", 422);
 
@@ -156,7 +150,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
             if (!pvc.MountPath.StartsWith("/"))
                 return Fail($"PVC '{pvc.Name}' mount path '{pvc.MountPath}' must be an absolute path (start with '/')", 422);
 
-            // Smart conditional validation: If CreatePvc is true, then Storage is required
             if (pvc.CreatePvc)
             {
                 if (string.IsNullOrWhiteSpace(pvc.Storage))
@@ -166,11 +159,9 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
                     return Fail($"PVC '{pvc.Name}' has invalid storage quantity '{pvc.Storage}'. Must use units: Gi, Mi, or Ki (e.g., '1Gi', '500Mi')", 422);
             }
 
-            // Validate StorageClass format if provided (optional unless creating)
             if (!string.IsNullOrWhiteSpace(pvc.StorageClass) && !IsValidKubernetesName(pvc.StorageClass))
                 return Fail($"PVC '{pvc.Name}' has invalid storage class name '{pvc.StorageClass}'. Must be a valid Kubernetes name", 422);
 
-            // Business logic validation: Cannot delete what wasn't created
             if (!pvc.CreatePvc && pvc.DeleteWithAgent)
                 return Fail($"PVC '{pvc.Name}' has CreatePvc=false but DeleteWithAgent=true. Cannot delete a PVC that wasn't created by this operator", 422);
         }
@@ -196,12 +187,29 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
         if (string.IsNullOrEmpty(name) || name.Length > 253)
             return false;
 
-        // Kubernetes names must be lowercase and contain only alphanumeric characters or '-'
-        // Must start and end with an alphanumeric character
         if (!char.IsLetterOrDigit(name[0]) || !char.IsLetterOrDigit(name[^1]))
             return false;
 
         return name.All(c => (char.IsLetterOrDigit(c) && char.IsLower(c)) || c == '-');
+    }
+
+    private ValidationResult? ValidateCertTrustStore(List<V1AzDORunnerEntity.CertTrustStore> certTrustStore)
+    {
+        var secretNames = new HashSet<string>();
+
+        foreach (var cert in certTrustStore)
+        {
+            if (string.IsNullOrWhiteSpace(cert.SecretName))
+                return Fail("CertTrustStore entries must have a non-empty SecretName", 422);
+
+            if (!secretNames.Add(cert.SecretName))
+                return Fail($"Duplicate secret name '{cert.SecretName}' found in CertTrustStore", 422);
+
+            if (!IsValidKubernetesName(cert.SecretName))
+                return Fail($"Invalid secret name '{cert.SecretName}'. Must be a valid Kubernetes name (lowercase alphanumeric characters or '-', and must start and end with an alphanumeric character)", 422);
+        }
+
+        return null;
     }
 
     private static bool IsValidStorageQuantity(string quantity)
@@ -214,7 +222,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
         if (long.TryParse(quantity, out _))
             return true;
 
-        // Check if it ends with a valid unit
         return validUnits.Any(unit => quantity.EndsWith(unit, StringComparison.OrdinalIgnoreCase) &&
                                      long.TryParse(quantity.Substring(0, quantity.Length - unit.Length), out _));
     }

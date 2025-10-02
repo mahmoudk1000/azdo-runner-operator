@@ -45,6 +45,13 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
 
         public bool DeleteWithAgent { get; set; } = false;
     }
+
+    public class CertTrustStore
+    {
+        [DataAnnotationsRequired]
+        public string SecretName { get; set; } = string.Empty;
+    }
+
     public class V1AzDORunnerEntitySpec : IValidatableObject
     {
         [DataAnnotationsRequired]
@@ -79,6 +86,8 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public List<ExtraEnvVar> ExtraEnv { get; set; } = new();
 
         public List<PvcSpec> Pvcs { get; set; } = new();
+
+        public List<CertTrustStore> CertTrustStore { get; set; } = new();
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -118,7 +127,6 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
                     new[] { nameof(MaxAgents) });
             }
 
-            // Validate ExtraEnv
             foreach (var envVar in ExtraEnv)
             {
                 if (string.IsNullOrWhiteSpace(envVar.Name))
@@ -136,7 +144,6 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
                 }
             }
 
-            // Validate PVCs
             foreach (var pvc in Pvcs)
             {
                 if (string.IsNullOrWhiteSpace(pvc.Name))
@@ -158,6 +165,16 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
                     yield return new ValidationResult(
                         $"PVC '{pvc.Name}' must have a non-empty Storage value",
                         new[] { nameof(Pvcs) });
+                }
+            }
+
+            foreach (var cert in CertTrustStore)
+            {
+                if (string.IsNullOrWhiteSpace(cert.SecretName))
+                {
+                    yield return new ValidationResult(
+                        "CertTrustStore entries must have a non-empty SecretName",
+                        new[] { nameof(CertTrustStore) });
                 }
             }
         }

@@ -121,7 +121,14 @@ public class KubernetesPodService
                         {
                             Name = $"{runnerPool.Metadata.Name}-agent-{agentIndex}-{pvc.Name}",
                             MountPath = pvc.MountPath
-                        }).ToList(),
+                        }).Concat(
+                            runnerPool.Spec.CertTrustStore.Select(cert => new V1VolumeMount
+                            {
+                                Name = $"cert-{cert.SecretName}",
+                                MountPath = $"/etc/ssl/certs/{cert.SecretName}",
+                                ReadOnlyProperty = true
+                            })
+                        ).ToList(),
                         Resources = new V1ResourceRequirements
                         {
                             Requests = new Dictionary<string, ResourceQuantity>
@@ -154,13 +161,22 @@ public class KubernetesPodService
                     {
                         ClaimName = $"{runnerPool.Metadata.Name}-agent-{agentIndex}-{pvc.Name}"
                     }
-                }).ToList()
+                }).Concat(
+                    runnerPool.Spec.CertTrustStore.Select(cert => new V1Volume
+                    {
+                        Name = $"cert-{cert.SecretName}",
+                        Secret = new V1SecretVolumeSource
+                        {
+                            SecretName = cert.SecretName,
+                            DefaultMode = 420 // 0644 in octal
+                        }
+                    })
+                ).ToList()
             }
         };
 
         try
         {
-            // Create or reuse PVCs first if needed
             var createdPvcNames = new List<string>();
             foreach (var pvcSpec in runnerPool.Spec.Pvcs)
             {
@@ -199,7 +215,6 @@ public class KubernetesPodService
                 }
                 else
                 {
-                    // For existing PVCs, just check if they exist
                     var existingPvc = await TryGetExistingPvcAsync(runnerPool, agentIndex, pvcSpec);
                     if (existingPvc != null)
                     {
@@ -599,19 +614,16 @@ public class KubernetesPodService
 
     private string DetermineImageForCapability(V1AzDORunnerEntity runnerPool, string? requiredCapability)
     {
-        // If capability-aware mode is disabled, always use the default image
         if (!runnerPool.Spec.CapabilityAware)
         {
             return runnerPool.Spec.Image;
         }
 
-        // If no specific capability is required, use the default image
         if (string.IsNullOrEmpty(requiredCapability))
         {
             return runnerPool.Spec.Image;
         }
 
-        // Check if we have a specific image for the required capability
         if (runnerPool.Spec.CapabilityImages.TryGetValue(requiredCapability, out var capabilityImage))
         {
             _logger.LogInformation("Using capability-specific image {Image} for capability {Capability}",
@@ -619,7 +631,6 @@ public class KubernetesPodService
             return capabilityImage;
         }
 
-        // Fallback to default image if no specific capability image is configured
         _logger.LogWarning("No specific image configured for capability {Capability}, using default image {Image}",
             requiredCapability, runnerPool.Spec.Image);
         return runnerPool.Spec.Image;

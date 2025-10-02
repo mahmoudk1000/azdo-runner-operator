@@ -15,7 +15,13 @@ RUN apt-get update && \
     libicu74 \
     ca-certificates \
     gnupg \
+    zip \
+    unzip \
+    apt-transport-https \
+    software-properties-common \
+    wget \
     dos2unix \
+    openssh-client \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
