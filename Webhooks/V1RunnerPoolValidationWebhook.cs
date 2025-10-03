@@ -139,7 +139,7 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
                 return Fail($"Duplicate PVC name '{pvc.Name}' found in Pvcs", 422);
 
             if (!IsValidKubernetesName(pvc.Name))
-                return Fail($"Invalid PVC name '{pvc.Name}'. Must be a valid Kubernetes name (lowercase alphanumeric characters or '-', and must start and end with an alphanumeric character)", 422);
+                return Fail($"Invalid PVC name '{pvc.Name}'. Must be a valid Kubernetes name (RFC 1123)", 422);
 
             if (string.IsNullOrWhiteSpace(pvc.MountPath))
                 return Fail($"PVC '{pvc.Name}' must have a MountPath specified", 422);
@@ -174,8 +174,6 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
         if (string.IsNullOrEmpty(name))
             return false;
 
-        // Environment variable names must contain only alphanumeric characters and underscores
-        // and cannot start with a digit
         if (char.IsDigit(name[0]))
             return false;
 
@@ -184,13 +182,16 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
 
     private static bool IsValidKubernetesName(string name)
     {
-        if (string.IsNullOrEmpty(name) || name.Length > 253)
+        if (string.IsNullOrEmpty(name) || name.Length > 63)
             return false;
 
-        if (!char.IsLetterOrDigit(name[0]) || !char.IsLetterOrDigit(name[^1]))
+        if (!char.IsLetter(name[0]) || !char.IsLower(name[0]))
             return false;
 
-        return name.All(c => (char.IsLetterOrDigit(c) && char.IsLower(c)) || c == '-');
+        if (!(char.IsLower(name[^1]) || char.IsDigit(name[^1])))
+            return false;
+
+        return name.All(c => (char.IsLower(c) && char.IsLetter(c)) || char.IsDigit(c) || c == '-');
     }
 
     private ValidationResult? ValidateCertTrustStore(List<V1AzDORunnerEntity.CertTrustStore> certTrustStore)
@@ -206,7 +207,7 @@ public class V1RunnerPoolValidationWebhook : ValidationWebhook<V1AzDORunnerEntit
                 return Fail($"Duplicate secret name '{cert.SecretName}' found in CertTrustStore", 422);
 
             if (!IsValidKubernetesName(cert.SecretName))
-                return Fail($"Invalid secret name '{cert.SecretName}'. Must be a valid Kubernetes name (lowercase alphanumeric characters or '-', and must start and end with an alphanumeric character)", 422);
+                return Fail($"Invalid secret name '{cert.SecretName}'. Must be a valid Kubernetes name (RFC 1123)", 422);
         }
 
         return null;
