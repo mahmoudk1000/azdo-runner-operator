@@ -24,7 +24,7 @@
             version = "0.1.0";
             src = ./.;
             projectFile = "AzDORunner.csproj";
-            nugetDeps = ./nix/deps.nix;
+            nugetDeps = ./deps.json;
             doCheck = true;
             meta = with pkgs.lib; {
               description = "Azure DevOps Runners Operator";
