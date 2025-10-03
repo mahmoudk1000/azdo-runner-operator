@@ -12,21 +12,26 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        dotnet-sdk = pkgs.dotnet-sdk_9;
-        dotnet-runtime = pkgs.dotnet-runtime_9;
+        dotnet-sdk = pkgs.dotnetCorePackages.sdk_9_0;
+        dotnet-runtime = pkgs.dotnetCorePackages.runtime_9_0;
+
+        csproj = builtins.readFile ./AzDORunner.csproj;
+        versionS = builtins.match ".*<Version>(.*?)</Version>.*" csproj;
+        version = builtins.elemAt versionS 0;
       in
       {
         packages = rec {
           default = pkgs.buildDotnetModule {
-            inherit dotnet-sdk dotnet-runtime;
+            inherit dotnet-sdk dotnet-runtime version;
 
             pname = "AzDORunner";
-            version = "0.1.0";
             src = ./.;
             projectFile = "AzDORunner.csproj";
             nugetDeps = ./deps.json;
             doCheck = true;
+
             meta = with pkgs.lib; {
+              mainProgram = "AzDORunner";
               description = "Azure DevOps Runners Operator";
               homepage = "https://github.com/mahmoudk1000/azdo-runner-operator";
               license = licenses.mit;
@@ -36,18 +41,20 @@
 
           docker = pkgs.dockerTools.buildImage {
             name = "mahmoudk1000/azdo-runner-operator";
-            tag = "latest";
+            tag = version;
             contents = [ default ];
             config = {
               Cmd = [ "${default}/bin/AzDORunner" ];
               User = "0:0";
               WorkingDir = "/app";
               ExposedPorts = {
-                "8080/tcp" = { };
+                "443/tcp" = { };
               };
               Env = [
-                "ASPNETCORE_URLS=http://+:8080"
                 "DOTNET_RUNNING_IN_CONTAINER=true"
+                "KESTREL__ENDPOINTS__HTTPS__URL=https://0.0.0.0:443"
+                "KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__PATH=/certs/tls.crt"
+                "KESTREL__ENDPOINTS__HTTPS__CERTIFICATE__KEYPATH=/certs/tls.key"
               ];
             };
           };
