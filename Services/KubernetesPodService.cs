@@ -125,7 +125,8 @@ public class KubernetesPodService
                             runnerPool.Spec.CertTrustStore.Select(cert => new V1VolumeMount
                             {
                                 Name = $"cert-{cert.SecretName}",
-                                MountPath = $"/etc/ssl/certs/{cert.SecretName}",
+                                MountPath = $"/etc/ssl/certs/{cert.SecretName}.crt",
+                                SubPath = "tls.crt",
                                 ReadOnlyProperty = true
                             })
                         ).ToList(),
@@ -168,7 +169,15 @@ public class KubernetesPodService
                         Secret = new V1SecretVolumeSource
                         {
                             SecretName = cert.SecretName,
-                            DefaultMode = 420 // 0644 in octal
+                            DefaultMode = 420, // 0644 in octal
+                            Items = new List<V1KeyToPath>
+                            {
+                                new V1KeyToPath
+                                {
+                                    Key = "tls.crt",
+                                    Path = "tls.crt"
+                                }
+                            }
                         }
                     })
                 ).ToList()
