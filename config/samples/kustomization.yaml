@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- opentools.mf_v1_runnerpool.yaml
+# +kubebuilder:scaffold:manifestskustomizesamples
