@@ -4,6 +4,7 @@ LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
 
 ARG VERSION=4.260.0
 ARG RUNTIME_TYPE=base
+ARG DOTNET_VERSION=8.0.404
 
 ENV AZP_CAPABILITY=${RUNTIME_TYPE}
 
@@ -22,8 +23,11 @@ RUN apt-get update && \
     wget \
     dos2unix \
     openssh-client \
+    python3-pip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml
 
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
@@ -36,14 +40,14 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     && echo "maven=true" >> /tmp/capabilities.txt \
     && echo "jdk=true" >> /tmp/capabilities.txt; \
     elif [ "$RUNTIME_TYPE" = "dotnet" ]; then \
-    curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg && \
-    echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/repos/microsoft-ubuntu-jammy-prod jammy main" > /etc/apt/sources.list.d/microsoft-prod.list && \
-    apt-get update && \
-    apt-get install -y --no-install-recommends \
-    dotnet-runtime-8.0 \
-    && rm -rf /var/lib/apt/lists/* \
-    && apt-get clean \
-    && echo "dotnet=true" > /tmp/capabilities.txt \
+    curl -sSL https://dot.net/v1/dotnet-install.sh -o dotnet-install.sh && \
+    chmod +x dotnet-install.sh && \
+    ./dotnet-install.sh --version ${DOTNET_VERSION} --install-dir /usr/share/dotnet && \
+    ln -s /usr/share/dotnet/dotnet /usr/bin/dotnet && \
+    rm dotnet-install.sh && \
+    echo "DOTNET_ROOT=/usr/share/dotnet" >> /etc/environment && \
+    echo "PATH=/usr/share/dotnet:\$PATH" >> /etc/environment && \
+    echo "dotnet=true" > /tmp/capabilities.txt \
     && echo ".net=true" >> /tmp/capabilities.txt \
     && echo "nuget=true" >> /tmp/capabilities.txt; \
     elif [ "$RUNTIME_TYPE" = "nodejs" ]; then \
