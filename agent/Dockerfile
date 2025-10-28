@@ -27,7 +27,7 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml
+RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml --break-system-packages
 
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
