@@ -152,8 +152,7 @@ public class AzureDevOpsPollingService : BackgroundService
             // If we successfully polled everything, set status to Connected
             connectionStatus = "Connected";
 
-            // 0. Clean up error pods immediately and retry if needed
-            await CleanupErrorPodsAsync(entity, pat, allPods);
+            // Note: Error pod cleanup is now handled by the separate ErrorPodCleanupService
 
             // 1. Clean up completed agents/pods (Failed/Completed pods are deleted immediately)
             await CleanupCompletedAgentsAsync(entity, pat, azureAgents, allPods);
@@ -412,72 +411,7 @@ public class AzureDevOpsPollingService : BackgroundService
         }
     }
 
-    private async Task CleanupErrorPodsAsync(V1AzDORunnerEntity entity, string pat, List<V1Pod> allPods)
-    {
-        // Find pods with Error status or stuck in problematic states (IMMEDIATELY clean up these)
-        var errorPods = allPods.Where(pod =>
-            pod.Status?.Phase == "Error" ||
-            (pod.Status?.Phase == "Pending" &&
-             pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ImagePullBackOff" ||
-                                                     cs.State?.Waiting?.Reason == "ErrImagePull" ||
-                                                     cs.State?.Waiting?.Reason == "CrashLoopBackOff" ||
-                                                     cs.State?.Waiting?.Reason == "InvalidImageName" ||
-                                                     cs.State?.Waiting?.Reason == "ImageInspectError") == true) ||
-            // Only consider ContainerCreating as stuck if it's been more than 15 minutes (increased tolerance)
-            (pod.Status?.Phase == "Pending" &&
-             pod.Metadata.CreationTimestamp.HasValue &&
-             DateTime.UtcNow - pod.Metadata.CreationTimestamp.Value > TimeSpan.FromMinutes(15) &&
-             pod.Status?.ContainerStatuses?.Any(cs => cs.State?.Waiting?.Reason == "ContainerCreating") == true)).ToList();
 
-        foreach (var errorPod in errorPods)
-        {
-            try
-            {
-                var podName = errorPod.Metadata.Name;
-                var namespaceName = entity.Metadata.NamespaceProperty ?? "default";
-
-                _logger.LogWarning("Found error pod '{PodName}' with status '{Phase}'. Deleting immediately (error states ignore TTL).",
-                    podName, errorPod.Status?.Phase);
-
-                // Log container status details for debugging
-                if (errorPod.Status?.ContainerStatuses != null)
-                {
-                    foreach (var containerStatus in errorPod.Status.ContainerStatuses)
-                    {
-                        if (containerStatus.State?.Waiting != null)
-                        {
-                            _logger.LogWarning("Container '{ContainerName}' in pod '{PodName}' is waiting with reason: {Reason}, message: {Message}",
-                                containerStatus.Name, podName, containerStatus.State.Waiting.Reason, containerStatus.State.Waiting.Message);
-                        }
-                        if (containerStatus.State?.Terminated != null)
-                        {
-                            _logger.LogWarning("Container '{ContainerName}' in pod '{PodName}' terminated with reason: {Reason}, exit code: {ExitCode}",
-                                containerStatus.Name, podName, containerStatus.State.Terminated.Reason, containerStatus.State.Terminated.ExitCode);
-                        }
-                    }
-                }
-
-                // Try to unregister the agent from Azure DevOps if it exists
-                try
-                {
-                    await _azureDevOpsService.UnregisterAgentAsync(entity.Spec.AzDoUrl, entity.Spec.Pool, podName, pat);
-                    _logger.LogInformation("Unregistered failed agent '{AgentName}' from Azure DevOps", podName);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogDebug(ex, "Could not unregister agent '{AgentName}' - it may not be registered yet", podName);
-                }
-
-                // Delete the error pod
-                await _kubernetesPodService.DeletePodAsync(podName, namespaceName);
-                _logger.LogInformation("Deleted error pod '{PodName}'. New pod will be created automatically if needed.", podName);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Failed to cleanup error pod '{PodName}'", errorPod.Metadata.Name);
-            }
-        }
-    }
 
     private async Task CleanupIdleAgentsAsync(V1AzDORunnerEntity entity, string pat, List<Agent> azureAgents, List<V1Pod> pods)
     {

@@ -18,6 +18,25 @@ public interface IAzureDevOpsService
 
 public class AzureDevOpsService : IAzureDevOpsService
 {
+    #region Fields
+
+    private readonly HttpClient _httpClient;
+    private readonly ILogger<AzureDevOpsService> _logger;
+
+    #endregion
+
+    #region Constructor
+
+    public AzureDevOpsService(HttpClient httpClient, ILogger<AzureDevOpsService> logger)
+    {
+        _httpClient = httpClient;
+        _logger = logger;
+    }
+
+    #endregion
+
+    #region Public Methods
+
     public async Task<List<JobRequest>> GetJobRequestsAsync(string azDoUrl, string poolName, string pat)
     {
         try
@@ -107,38 +126,6 @@ public class AzureDevOpsService : IAzureDevOpsService
             _logger.LogError(ex, "Failed to get queued jobs with capabilities for pool '{PoolName}' from {AzDoUrl}", poolName, azDoUrl);
             return new List<JobRequest>();
         }
-    }
-
-    private string? ExtractRequiredCapabilityFromDemands(List<string> demands)
-    {
-        if (demands == null || !demands.Any())
-            return null;
-
-        // Return the first demand found - this allows exact keyword matching
-        // If user configures "mykeyword" in capabilityImages and sets demands: [mykeyword]
-        // it will return "mykeyword" directly for exact matching
-        foreach (var demand in demands)
-        {
-            var cleanDemand = demand.Trim().ToLowerInvariant();
-
-            // Return the demand as-is for direct matching with capabilityImages keys
-            // This enables custom keywords like "mykeyword", "gpu", "docker", etc.
-            if (!string.IsNullOrEmpty(cleanDemand))
-            {
-                _logger.LogDebug("Found capability demand: '{Demand}'", cleanDemand);
-                return cleanDemand;
-            }
-        }
-
-        return null; // No demands found
-    }
-    private readonly HttpClient _httpClient;
-    private readonly ILogger<AzureDevOpsService> _logger;
-
-    public AzureDevOpsService(HttpClient httpClient, ILogger<AzureDevOpsService> logger)
-    {
-        _httpClient = httpClient;
-        _logger = logger;
     }
 
     public string ExtractOrganizationName(string azDoUrl)
@@ -454,6 +441,34 @@ public class AzureDevOpsService : IAzureDevOpsService
         }
     }
 
+    #endregion
+
+    #region Private Methods
+
+    private string? ExtractRequiredCapabilityFromDemands(List<string> demands)
+    {
+        if (demands == null || !demands.Any())
+            return null;
+
+        // Return the first demand found - this allows exact keyword matching
+        // If user configures "mykeyword" in capabilityImages and sets demands: [mykeyword]
+        // it will return "mykeyword" directly for exact matching
+        foreach (var demand in demands)
+        {
+            var cleanDemand = demand.Trim().ToLowerInvariant();
+
+            // Return the demand as-is for direct matching with capabilityImages keys
+            // This enables custom keywords like "mykeyword", "gpu", "docker", etc.
+            if (!string.IsNullOrEmpty(cleanDemand))
+            {
+                _logger.LogDebug("Found capability demand: '{Demand}'", cleanDemand);
+                return cleanDemand;
+            }
+        }
+
+        return null; // No demands found
+    }
+
     private async Task<int?> GetPoolIdAsync(string azDoUrl, string poolName, string pat)
     {
         try
@@ -496,4 +511,6 @@ public class AzureDevOpsService : IAzureDevOpsService
             return null;
         }
     }
+
+    #endregion
 }

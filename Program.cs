@@ -38,6 +38,17 @@ builder.Services.AddSingleton<AzureDevOpsPollingService>(provider =>
 });
 builder.Services.AddHostedService(provider => provider.GetRequiredService<AzureDevOpsPollingService>());
 
+builder.Services.AddSingleton<ErrorPodCleanupService>(provider =>
+{
+    var errorCleanupService = new ErrorPodCleanupService(
+        provider.GetRequiredService<ILogger<ErrorPodCleanupService>>(),
+        provider.GetRequiredService<KubernetesPodService>(),
+        provider.GetRequiredService<IAzureDevOpsService>(),
+        provider.GetRequiredService<IKubernetes>());
+    return errorCleanupService;
+});
+builder.Services.AddHostedService(provider => provider.GetRequiredService<ErrorPodCleanupService>());
+
 var app = builder.Build();
 
 app.UseRouting();

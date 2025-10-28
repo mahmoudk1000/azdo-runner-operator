@@ -18,6 +18,7 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
     private readonly KubernetesPodService _kubernetesPodService;
     private readonly IKubernetes _kubernetesClient;
     private readonly AzureDevOpsPollingService _pollingService;
+    private readonly ErrorPodCleanupService _errorPodCleanupService;
     private readonly IRunnerPoolStatusService _statusService;
 
     public RunnerPoolController(
@@ -26,6 +27,7 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         KubernetesPodService kubernetesPodService,
         IKubernetes kubernetesClient,
         AzureDevOpsPollingService pollingService,
+        ErrorPodCleanupService errorPodCleanupService,
         IRunnerPoolStatusService statusService)
     {
         _logger = logger;
@@ -33,6 +35,7 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
         _kubernetesPodService = kubernetesPodService;
         _kubernetesClient = kubernetesClient;
         _pollingService = pollingService;
+        _errorPodCleanupService = errorPodCleanupService;
         _statusService = statusService;
     }
 
@@ -63,7 +66,10 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
             // Register with the polling service for continuous monitoring
             _pollingService.RegisterPool(entity, pat);
 
-            _logger.LogInformation("Registered RunnerPool {Name} with Azure DevOps polling service", entity.Metadata.Name);
+            // Register with the error pod cleanup service for immediate error pod removal
+            _errorPodCleanupService.RegisterPool(entity, pat);
+
+            _logger.LogInformation("Registered RunnerPool {Name} with Azure DevOps polling and error cleanup services", entity.Metadata.Name);
         }
         catch (Exception ex)
         {
@@ -76,6 +82,7 @@ public class RunnerPoolController : IEntityController<V1AzDORunnerEntity>
     {
         _logger.LogInformation("RunnerPool {Name} deleted, cleaning up resources", entity.Metadata.Name);
         _pollingService.UnregisterPool(entity.Metadata.Name);
+        _errorPodCleanupService.UnregisterPool(entity.Metadata.Name);
         return Task.CompletedTask;
     }
 
