@@ -5,29 +5,43 @@ LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
 ARG VERSION=4.260.0
 ARG RUNTIME_TYPE=base
 ARG DOTNET_VERSION=8.0.404
+ARG YQ_VERSION=4.44.2
+ARG KUBECTL_VERSION=1.31.2
+ARG HELM_VERSION=3.16.2
 
 ENV AZP_CAPABILITY=${RUNTIME_TYPE}
 
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
+    apt-transport-https \
+    ca-certificates \
     curl \
+    dos2unix \
     git \
+    gnupg \
     jq \
     libicu74 \
-    ca-certificates \
-    gnupg \
-    zip \
-    unzip \
-    apt-transport-https \
-    software-properties-common \
-    wget \
-    dos2unix \
     openssh-client \
+    python3 \
     python3-pip \
+    software-properties-common \
+    unzip \
+    wget \
+    zip \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml --break-system-packages
+
+RUN curl -sSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64 -o /usr/local/bin/yq \
+    && chmod +x /usr/local/bin/yq \
+    && curl -sSL https://dl.k8s.io/release/v${KUBECTL_VERSION}/bin/linux/amd64/kubectl -o /usr/local/bin/kubectl \
+    && chmod +x /usr/local/bin/kubectl \
+    && curl -sSL https://get.helm.sh/helm-v${HELM_VERSION}-linux-amd64.tar.gz -o helm.tar.gz \
+    && tar -zxf helm.tar.gz \
+    && mv linux-amd64/helm /usr/local/bin/helm \
+    && chmod +x /usr/local/bin/helm \
+    && rm -rf helm.tar.gz linux-amd64
 
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
