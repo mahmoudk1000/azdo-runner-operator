@@ -1,4 +1,4 @@
-FROM ubuntu:24.04
+FROM ubuntu:22.04
 
 LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
 
@@ -8,6 +8,7 @@ ARG DOTNET_VERSION=8.0.404
 ARG YQ_VERSION=4.44.2
 ARG KUBECTL_VERSION=1.31.2
 ARG HELM_VERSION=3.16.2
+ARG NODEJS_VERSION=20
 
 ENV AZP_CAPABILITY=${RUNTIME_TYPE}
 
@@ -20,7 +21,7 @@ RUN apt-get update && \
     git \
     gnupg \
     jq \
-    libicu74 \
+    libicu70 \
     openssh-client \
     python3 \
     python3-pip \
@@ -31,7 +32,7 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml --break-system-packages
+RUN pip3 install --no-cache-dir --upgrade jinja2-cli pyyaml
 
 RUN curl -sSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/yq_linux_amd64 -o /usr/local/bin/yq \
     && chmod +x /usr/local/bin/yq \
@@ -42,6 +43,12 @@ RUN curl -sSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/y
     && mv linux-amd64/helm /usr/local/bin/helm \
     && chmod +x /usr/local/bin/helm \
     && rm -rf helm.tar.gz linux-amd64
+
+RUN curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - && \
+    apt-get install -y --no-install-recommends \
+    nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
@@ -65,18 +72,18 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     && echo ".net=true" >> /tmp/capabilities.txt \
     && echo "nuget=true" >> /tmp/capabilities.txt; \
     elif [ "$RUNTIME_TYPE" = "nodejs" ]; then \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
-    apt-get install -y --no-install-recommends \
-    nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* \
-    && echo "node=true" > /tmp/capabilities.txt \
+    echo "node=true" > /tmp/capabilities.txt \
     && echo "nodejs=true" >> /tmp/capabilities.txt \
     && echo "npm=true" >> /tmp/capabilities.txt \
     && echo "javascript=true" >> /tmp/capabilities.txt; \
     else \
     echo "base=true" > /tmp/capabilities.txt; \
     fi
+
+RUN echo "node=true" >> /tmp/capabilities.txt \
+    && echo "nodejs=true" >> /tmp/capabilities.txt \
+    && echo "npm=true" >> /tmp/capabilities.txt \
+    && echo "javascript=true" >> /tmp/capabilities.txt
 
 RUN useradd -m -s /bin/bash azureuser && \
     mkdir -p /azp && \

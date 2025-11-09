@@ -21,8 +21,6 @@ jobs:
             suffix: -java
           - type: dotnet
             suffix: -dotnet
-          - type: nodejs
-            suffix: -nodejs
     permissions:
       contents: read
       packages: write
