@@ -152,9 +152,49 @@ public class KubernetesPodService
                                     Command = new List<string> { "/bin/bash", "-c", "echo 'PreStop hook triggered'; pkill -TERM Agent.Listener || true; sleep 5" }
                                 }
                             }
-                        }
+                        },
+                        SecurityContext = runnerPool.Spec.InitContainer != null ? new V1SecurityContext
+                        {
+                            RunAsUser = runnerPool.Spec.SecurityContext.RunAsUser,
+                            RunAsGroup = runnerPool.Spec.SecurityContext.RunAsGroup,
+                            RunAsNonRoot = runnerPool.Spec.SecurityContext.RunAsUser != 0,
+                            AllowPrivilegeEscalation = false
+                        } : null
                     }
                 },
+                InitContainers = runnerPool.Spec.InitContainer != null ? new List<V1Container>
+                {
+                    new()
+                    {
+                        Name = "init-permissions",
+                        Image = runnerPool.Spec.InitContainer.Image,
+                        ImagePullPolicy = runnerPool.Spec.ImagePullPolicy,
+                        Command = new List<string> { "sh", "-c" },
+                        Args = new List<string>
+                        {
+                            GenerateInitContainerScript(runnerPool, agentIndex)
+                        },
+                        VolumeMounts = runnerPool.Spec.Pvcs.Select(pvc => new V1VolumeMount
+                        {
+                            Name = $"{runnerPool.Metadata.Name}-agent-{agentIndex}-{pvc.Name}",
+                            MountPath = pvc.MountPath
+                        }).ToList(),
+                        SecurityContext = new V1SecurityContext
+                        {
+                            RunAsUser = 0,
+                            RunAsGroup = 0,
+                            RunAsNonRoot = false,
+                            AllowPrivilegeEscalation = true
+                        }
+                    }
+                } : null,
+                SecurityContext = runnerPool.Spec.InitContainer != null ? new V1PodSecurityContext
+                {
+                    FsGroup = runnerPool.Spec.SecurityContext.FsGroup,
+                    RunAsUser = runnerPool.Spec.SecurityContext.RunAsUser,
+                    RunAsGroup = runnerPool.Spec.SecurityContext.RunAsGroup,
+                    RunAsNonRoot = runnerPool.Spec.SecurityContext.RunAsUser != 0
+                } : null,
                 Volumes = runnerPool.Spec.Pvcs.Select(pvc => new V1Volume
                 {
                     Name = $"{runnerPool.Metadata.Name}-agent-{agentIndex}-{pvc.Name}",
@@ -643,5 +683,34 @@ public class KubernetesPodService
         _logger.LogWarning("No specific image configured for capability {Capability}, using default image {Image}",
             requiredCapability, runnerPool.Spec.Image);
         return runnerPool.Spec.Image;
+    }
+
+    private string GenerateInitContainerScript(V1AzDORunnerEntity runnerPool, int agentIndex)
+    {
+        if (runnerPool.Spec.InitContainer == null)
+        {
+            return "echo 'No init container configured'";
+        }
+
+        var uid = runnerPool.Spec.SecurityContext.RunAsUser;
+        var gid = runnerPool.Spec.SecurityContext.RunAsGroup;
+
+        var scriptLines = new List<string>
+        {
+            "echo 'Init container: Setting up permissions for runner user'",
+            $"echo 'Target UID: {uid}, GID: {gid}'"
+        };
+
+        foreach (var pvc in runnerPool.Spec.Pvcs)
+        {
+            var mountPath = pvc.MountPath;
+            scriptLines.Add($"echo 'Adjusting permissions for {mountPath}'");
+            scriptLines.Add($"chown -R {uid}:{gid} {mountPath}");
+            scriptLines.Add($"chmod -R u+rwX {mountPath}");
+        }
+
+        scriptLines.Add("echo 'Init container: Permission setup completed'");
+
+        return string.Join(" && ", scriptLines);
     }
 }

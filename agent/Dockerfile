@@ -85,13 +85,14 @@ RUN echo "node=true" >> /tmp/capabilities.txt \
     && echo "npm=true" >> /tmp/capabilities.txt \
     && echo "javascript=true" >> /tmp/capabilities.txt
 
-RUN useradd -m -s /bin/bash azureuser && \
+RUN groupadd -g 1001 agent && \
+    useradd -m -u 1001 -g 1001 -s /bin/bash agent && \
     mkdir -p /azp && \
-    chown azureuser:azureuser /azp
+    chown agent:agent /azp
 
 RUN curl -fsSL https://download.agent.dev.azure.com/agent/${VERSION}/vsts-agent-linux-x64-${VERSION}.tar.gz | \
     tar -xz -C /azp && \
-    chown -R azureuser:azureuser /azp && \
+    chown -R agent:agent /azp && \
     chmod +x /azp/*.sh /azp/bin/* /azp/externals/node/bin/* 2>/dev/null || true
 
 RUN apt-get autoremove -y && \
@@ -104,10 +105,10 @@ RUN dos2unix /azp/start.sh && \
 
 RUN if [ -f /tmp/capabilities.txt ]; then \
     cp /tmp/capabilities.txt /azp/capabilities.txt && \
-    chown azureuser:azureuser /azp/capabilities.txt; \
+    chown agent:agent /azp/capabilities.txt; \
     fi
 
-USER azureuser
+USER agent
 WORKDIR /azp
 
 ENV RUNTIME_TYPE=${RUNTIME_TYPE}

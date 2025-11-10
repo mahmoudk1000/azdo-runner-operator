@@ -52,6 +52,20 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public string SecretName { get; set; } = string.Empty;
     }
 
+    public class InitContainerSpec
+    {
+        public string Image { get; set; } = "busybox:latest";
+    }
+
+    public class SecurityContextSpec
+    {
+        public int RunAsUser { get; set; } = 1001;
+
+        public int RunAsGroup { get; set; } = 1001;
+
+        public int FsGroup { get; set; } = 1001;
+    }
+
     public class V1AzDORunnerEntitySpec : IValidatableObject
     {
         [DataAnnotationsRequired]
@@ -88,6 +102,10 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
         public List<PvcSpec> Pvcs { get; set; } = new();
 
         public List<CertTrustStore> CertTrustStore { get; set; } = new();
+
+        public InitContainerSpec? InitContainer { get; set; } = null;
+
+        public SecurityContextSpec SecurityContext { get; set; } = new();
 
         public IEnumerable<ValidationResult> Validate(ValidationContext validationContext)
         {
@@ -175,6 +193,37 @@ public class V1AzDORunnerEntity : CustomKubernetesEntity<V1AzDORunnerEntity.V1Az
                     yield return new ValidationResult(
                         "CertTrustStore entries must have a non-empty SecretName",
                         new[] { nameof(CertTrustStore) });
+                }
+            }
+
+            if (SecurityContext.RunAsUser < 0)
+            {
+                yield return new ValidationResult(
+                    "SecurityContext.RunAsUser must be a non-negative value",
+                    new[] { nameof(SecurityContext) });
+            }
+
+            if (SecurityContext.RunAsGroup < 0)
+            {
+                yield return new ValidationResult(
+                    "SecurityContext.RunAsGroup must be a non-negative value",
+                    new[] { nameof(SecurityContext) });
+            }
+
+            if (SecurityContext.FsGroup < 0)
+            {
+                yield return new ValidationResult(
+                    "SecurityContext.FsGroup must be a non-negative value",
+                    new[] { nameof(SecurityContext) });
+            }
+
+            if (InitContainer != null)
+            {
+                if (string.IsNullOrWhiteSpace(InitContainer.Image))
+                {
+                    yield return new ValidationResult(
+                        "InitContainer.Image must be specified",
+                        new[] { nameof(InitContainer) });
                 }
             }
         }

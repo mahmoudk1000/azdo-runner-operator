@@ -79,6 +79,8 @@ spec:
 | `maxAgents` | int | false | Maximum number of agents (default: 10) |
 | `minAgents` | int | false | Minimum number of agents (default: 0) |
 | `ttlIdleSeconds` | int | false | Seconds before idle agents are removed (default: 0) |
+| `initContainer` | object | false | Init container configuration for permission setup |
+| `securityContext` | object | false | Security context for agent container (runAsUser, runAsGroup, fsGroup) |
 | `certTrustStore` | array | false | List of TLS secrets to mount as trusted certificates |
 
 ### Environment Variables
@@ -128,6 +130,36 @@ spec:
 | `createPvc` | bool | Whether operator should create the PVC |
 | `optional` | bool | Continue if PVC creation fails |
 | `deleteWithAgent` | bool | Delete PVC when agent is removed |
+
+### Init Container for Permission Management
+
+Configure an init container to adjust volume permissions for the runner user:
+
+```yaml
+spec:
+  initContainer:
+    image: busybox:latest
+  securityContext:
+    runAsUser: 1000    # UID for agent container
+    runAsGroup: 1000   # GID for agent container
+    fsGroup: 1000      # File system group ownership
+```
+
+**How it works:**
+
+The init container **always runs as root (UID 0)** with a script that automatically adjusts permissions on all mounted volumes. It executes `chown` and `chmod` commands to set ownership to the specified `securityContext.runAsUser:runAsGroup` for each PVC mount path.
+
+The **agent container** runs with the configured security context as a non-root user (default: azureuser, UID 1000), ensuring secure execution while maintaining access to properly configured volumes.
+
+**Configuration:**
+- `initContainer.image`: Image used for the init container (default: `busybox:latest`)
+- `securityContext.runAsUser`: UID for the agent container (default: 1000)
+- `securityContext.runAsGroup`: GID for the agent container (default: 1000)
+- `securityContext.fsGroup`: File system group ownership (default: 1000)
+- Init container security: Always runs as root to modify permissions (not configurable)
+- Agent container security: Runs as the specified non-root user with no privilege escalation
+
+**Note:** The security context values should match the UID/GID of the user in your agent Dockerfile. By default, the agent runs as `azureuser` with UID:GID 1000:1000.
 
 ### Certificate Trust Store
 
@@ -244,6 +276,12 @@ spec:
   capabilityImages:
     docker: my-registry/agent:docker
     kubernetes: my-registry/agent:k8s
+  initContainer:
+    image: busybox:latest
+  securityContext:
+    runAsUser: 1000
+    runAsGroup: 1000
+    fsGroup: 1000
   certTrustStore:
     - secretName: corporate-ca
     - secretName: proxy-cert
