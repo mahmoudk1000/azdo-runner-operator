@@ -2,7 +2,7 @@ FROM ubuntu:22.04
 
 LABEL maintainer="Mahmoud Farouk aka mahmoudk1000 (mahmoudk1000@gmail.com)"
 
-ARG VERSION=4.260.0
+ARG VERSION=4.259.0
 ARG RUNTIME_TYPE=base
 ARG DOTNET_VERSION=8.0.404
 ARG YQ_VERSION=4.44.2
@@ -44,12 +44,6 @@ RUN curl -sSL https://github.com/mikefarah/yq/releases/download/v${YQ_VERSION}/y
     && chmod +x /usr/local/bin/helm \
     && rm -rf helm.tar.gz linux-amd64
 
-RUN curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - && \
-    apt-get install -y --no-install-recommends \
-    nodejs \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
 RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     apt-get update && \
     apt-get install -y --no-install-recommends \
@@ -72,6 +66,12 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     && echo ".net=true" >> /tmp/capabilities.txt \
     && echo "nuget=true" >> /tmp/capabilities.txt; \
     elif [ "$RUNTIME_TYPE" = "nodejs" ]; then \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends \
+    nodejs \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/* \
+    && echo "node=true" > /tmp/capabilities.txt \
     echo "node=true" > /tmp/capabilities.txt \
     && echo "nodejs=true" >> /tmp/capabilities.txt \
     && echo "npm=true" >> /tmp/capabilities.txt \
@@ -79,11 +79,6 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     else \
     echo "base=true" > /tmp/capabilities.txt; \
     fi
-
-RUN echo "node=true" >> /tmp/capabilities.txt \
-    && echo "nodejs=true" >> /tmp/capabilities.txt \
-    && echo "npm=true" >> /tmp/capabilities.txt \
-    && echo "javascript=true" >> /tmp/capabilities.txt
 
 RUN groupadd -g 1001 agent && \
     useradd -m -u 1001 -g 1001 -s /bin/bash agent && \
