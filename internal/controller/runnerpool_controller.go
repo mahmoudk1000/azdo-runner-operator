@@ -14,6 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// Package controller contains the core reconciliation logic for the operator
+// The reconciler watches RunnerPool resources and ensures actual state matches desired state
 package controller
 
 import (
@@ -33,34 +35,99 @@ import (
 )
 
 // RunnerPoolReconciler reconciles a RunnerPool object
+// This is the core of the operator - it implements the reconciliation loop
 type RunnerPoolReconciler struct {
+	// Client is the Kubernetes client for CRUD operations
 	client.Client
+
+	// Scheme is the runtime scheme containing all known types
 	Scheme *runtime.Scheme
+
+	// TODO: Add your service dependencies here:
+	// AzDoClient     *azdo.Client
+	// PodService     *kubernetes.PodService
+	// PVCService     *kubernetes.PVCService
+	// PollingService *azdo.PollingService
 }
 
+// RBAC permissions - these generate RBAC manifests
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools/finalizers,verbs=update
+// TODO: Add RBAC for Pods, PVCs, Secrets
+// +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 
+// Reconcile is the main reconciliation loop
+// This function is called whenever a RunnerPool resource changes
+// Parameters:
+//   - ctx: Context for cancellation
+//   - req: The reconciliation request containing namespace/name of the resource
+//
+// Returns:
+//   - ctrl.Result: Contains requeue information
+//   - error: Any error that occurred
+//
+// The reconciliation loop should be idempotent - calling it multiple times
+// with the same input should produce the same result
 func (r *RunnerPoolReconciler) Reconcile(
 	ctx context.Context,
 	req ctrl.Request,
 ) (ctrl.Result, error) {
 	log := log.FromContext(ctx)
 
+	log.Info("Reconciling RunnerPool", "namespace", req.Namespace, "name", req.Name)
+
+	// TODO: Step 1 - Fetch the RunnerPool resource
+	// Get the RunnerPool from Kubernetes API
 	var runnerPool opentoolsmfv1.RunnerPool
-	if err := r.Get(ctx, types.NamespacedName{Namespace: req.Namespace, Name: runnerPool.Name}, &runnerPool); err != nil {
+	if err := r.Get(ctx, req.NamespacedName, &runnerPool); err != nil {
+		// If not found, it was deleted - nothing to do
+		// Otherwise, return error to retry
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
+	// TODO: Step 2 - Handle deletion (finalizers)
+	// Check if the resource is being deleted
 	if !runnerPool.ObjectMeta.DeletionTimestamp.IsZero() {
-		r.Delete(ctx, &runnerPool)
+		// Resource is being deleted
+		// TODO: Implement cleanup logic:
+		// 1. Unregister all agents from Azure DevOps
+		// 2. Delete all pods
+		// 3. Delete PVCs if configured to do so
+		// 4. Unregister from polling service
+		// 5. Remove finalizer so resource can be deleted
+
+		log.Info("RunnerPool is being deleted, cleaning up resources")
+
+		// TODO: Call cleanup methods
+
 		return ctrl.Result{}, nil
 	}
+
+	// TODO: Step 3 - Add finalizer if not present
+	// Finalizers prevent deletion until cleanup is complete
+	// if !controllerutil.ContainsFinalizer(&runnerPool, finalizerName) {
+	//     controllerutil.AddFinalizer(&runnerPool, finalizerName)
+	//     if err := r.Update(ctx, &runnerPool); err != nil {
+	//         return ctrl.Result{}, err
+	//     }
+	// }
+
+	// TODO: Step 4 - Get PAT from secret
+	// Read the Personal Access Token from the referenced secret
+	// pat, err := r.getPATFromSecret(ctx, &runnerPool)
+	// if err != nil {
+	//     log.Error(err, "Failed to get PAT from secret")
+	//     // Update status to show error
+	//     return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	// }
 
 	patToken, err := r.getPATToken(ctx, &runnerPool)
 	if err != nil {
 		log.Error(err, "secret: ", runnerPool.Spec.PATSecretName, "does not exist or is invalid")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
 	azdoClient, err := azdo.NewClient(runnerPool.Spec.AzURL, patToken)
@@ -68,6 +135,7 @@ func (r *RunnerPoolReconciler) Reconcile(
 		log.Error(err, "failed to create AzDO client")
 		runnerPool.Status.LastError = fmt.Sprintf("failed to get PAT token: %v", err)
 		runnerPool.Status.ConnectionStatus = "Error"
+		return ctrl.Result{}, err
 	}
 
 	azdoPolling := azdo.NewPollingService(azdoClient)
@@ -84,7 +152,41 @@ func (r *RunnerPoolReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{}, nil
+	// TODO: Step 5 - Test Azure DevOps connection
+	// Verify we can connect to Azure DevOps with the provided credentials
+	// if err := r.AzDoClient.TestConnection(ctx, runnerPool.Spec.AzDoURL, pat); err != nil {
+	//     log.Error(err, "Failed to connect to Azure DevOps")
+	//     // Update status
+	//     return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	// }
+
+	// TODO: Step 6 - Register with polling service
+	// The polling service handles the continuous monitoring and scaling
+	// r.PollingService.RegisterPool(
+	//     runnerPool.Namespace,
+	//     runnerPool.Name,
+	//     pat,
+	//     time.Duration(runnerPool.Spec.PollIntervalSeconds) * time.Second,
+	// )
+
+	// TODO: Step 7 - Update agent index tracking in status
+	// Keep track of which agent indexes are in use
+	// if err := r.updateAgentIndexTracking(ctx, &runnerPool); err != nil {
+	//     log.Error(err, "Failed to update agent index tracking")
+	// }
+
+	// TODO: Step 8 - Update status
+	// Update the status subresource with current state
+	// if err := r.updateStatus(ctx, &runnerPool); err != nil {
+	//     log.Error(err, "Failed to update status")
+	//     return ctrl.Result{}, err
+	// }
+
+	log.Info("Reconciliation completed successfully")
+
+	// Don't requeue - the polling service handles continuous monitoring
+	// But requeue after some time as a safety net
+	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
 }
 
 func (r *RunnerPoolReconciler) getPATToken(
