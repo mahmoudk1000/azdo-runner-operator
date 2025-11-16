@@ -38,16 +38,11 @@ import (
 // RunnerPoolReconciler reconciles a RunnerPool object
 // This is the core of the operator - it implements the reconciliation loop
 type RunnerPoolReconciler struct {
-	// Client is the Kubernetes client for CRUD operations
 	client.Client
-
-	// Scheme is the runtime scheme containing all known types
 	Scheme *runtime.Scheme
-
 	// TODO: Add your service dependencies here:
-	// AzDoClient     *azdo.Client
+	AzDoClient *azdo.Client
 	// PodService     *kubernetes.PodService
-	// PVCService     *kubernetes.PVCService
 	// PollingService *azdo.PollingService
 }
 
@@ -93,12 +88,38 @@ func (r *RunnerPoolReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	// TODO: Step 2 - Handle deletion (finalizers)
+	// TODO: Step 2 - Get PAT from secret and initialize Azure DevOps client
+	// Initialize client early so it's available for deletion cleanup
+	patToken, err := r.getPATToken(ctx, runnerPool)
+	if err != nil {
+		log.Error(err, "Failed to get PAT from secret", "secret", runnerPool.Spec.PATSecretName)
+		runnerPool.Status.LastError = fmt.Sprintf("failed to get PAT token: %v", err)
+		runnerPool.Status.ConnectionStatus = "Error"
+		if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+
+	// Create Azure DevOps client for this specific RunnerPool
+	r.AzDoClient, err = azdo.NewClient(runnerPool.Spec.AzURL, patToken)
+	if err != nil {
+		log.Error(err, "Failed to create AzDO client")
+		runnerPool.Status.LastError = fmt.Sprintf("failed to create AzDO client: %v", err)
+		runnerPool.Status.ConnectionStatus = "Error"
+		if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+			log.Error(statusErr, "Failed to update status")
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	defer r.AzDoClient.Close()
+
+	// TODO: Step 3 - Handle deletion (finalizers)
 	// Check if the resource is being deleted
 	if !runnerPool.DeletionTimestamp.IsZero() {
 		// Resource is being deleted
 		// TODO: Implement cleanup logic:
-		// 1. Unregister all agents from Azure DevOps
+		// 1. Unregister all agents from Azure DevOps (use r.AzDoClient)
 		// 2. Delete all pods
 		// 3. Delete PVCs if configured to do so
 		// 4. Unregister from polling service
@@ -107,85 +128,48 @@ func (r *RunnerPoolReconciler) Reconcile(
 		log.Info("RunnerPool is being deleted, cleaning up resources")
 
 		// TODO: Call cleanup methods
+		// Example: r.cleanupAgents(ctx, runnerPool)
 
 		return ctrl.Result{}, nil
 	}
 
-	// TODO: Step 3 - Add finalizer if not present
+	// TODO: Step 4 - Add finalizer if not present
 	// Finalizers prevent deletion until cleanup is complete
-	// if !controllerutil.ContainsFinalizer(&runnerPool, finalizerName) {
-	//     controllerutil.AddFinalizer(&runnerPool, finalizerName)
-	//     if err := r.Update(ctx, &runnerPool); err != nil {
-	//         return ctrl.Result{}, err
-	//     }
-	// }
+	// 1. Check if finalizer exists using controllerutil.ContainsFinalizer
+	// 2. If not present, add it using controllerutil.AddFinalizer
+	// 3. Update the resource in Kubernetes API
+	// 4. Return if update fails
 
-	// TODO: Step 4 - Get PAT from secret
-	// Read the Personal Access Token from the referenced secret
-	// pat, err := r.getPATFromSecret(ctx, &runnerPool)
-	// if err != nil {
-	//     log.Error(err, "Failed to get PAT from secret")
-	//     // Update status to show error
-	//     return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	// }
+	// TODO: Step 5 - Poll Azure DevOps for pool information
+	// Query Azure DevOps to get current state of the runner pool
+	// 1. Create a new PollingService with the AzDoClient
+	// 2. Call Poll() with the pool name from runnerPool.Spec.Pool
+	// 3. If error occurs:
+	//    - Log the error
+	//    - Update status with ConnectionStatus = "Error" and LastError
+	//    - Update the status in Kubernetes
+	//    - Requeue after 30 seconds
+	// 4. Store the poll result for next step
 
-	patToken, err := r.getPATToken(ctx, runnerPool)
-	if err != nil {
-		log.Error(err, "secret: ", runnerPool.Spec.PATSecretName, "does not exist or is invalid")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
+	// TODO: Step 6 - Update status with poll results
+	// Update the RunnerPool status with information from Azure DevOps
+	// 1. Call updateStatus helper function with poll result
+	// 2. If error occurs, log it and return the error
+	// 3. This keeps Kubernetes status in sync with Azure DevOps state
 
-	azdoClient, err := azdo.NewClient(runnerPool.Spec.AzURL, patToken)
-	if err != nil {
-		log.Error(err, "failed to create AzDO client")
-		runnerPool.Status.LastError = fmt.Sprintf("failed to get PAT token: %v", err)
-		runnerPool.Status.ConnectionStatus = "Error"
-		return ctrl.Result{}, err
-	}
+	// TODO: Step 7 - Register with polling service
+	// The polling service handles continuous monitoring and scaling
+	// 1. Call RegisterPool on the PollingService
+	// 2. Pass namespace, name, PAT token, and poll interval
+	// 3. Convert PollIntervalSeconds to time.Duration
+	// 4. This starts background monitoring for this RunnerPool
 
-	azdoPolling := azdo.NewPollingService(azdoClient)
-
-	pollResult, err := azdoPolling.Poll(ctx, runnerPool.Spec.Pool)
-	if err != nil {
-		log.Error(err, "failed to poll AzDO for runner pool info")
-		runnerPool.Status.ConnectionStatus = "Error"
-		runnerPool.Status.LastError = err.Error()
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
-	}
-
-	if err := r.updateStatus(ctx, runnerPool, pollResult); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// TODO: Step 5 - Test Azure DevOps connection
-	// Verify we can connect to Azure DevOps with the provided credentials
-	// if err := r.AzDoClient.TestConnection(ctx, runnerPool.Spec.AzDoURL, pat); err != nil {
-	//     log.Error(err, "Failed to connect to Azure DevOps")
-	//     // Update status
-	//     return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	// }
-
-	// TODO: Step 6 - Register with polling service
-	// The polling service handles the continuous monitoring and scaling
-	// r.PollingService.RegisterPool(
-	//     runnerPool.Namespace,
-	//     runnerPool.Name,
-	//     pat,
-	//     time.Duration(runnerPool.Spec.PollIntervalSeconds) * time.Second,
-	// )
-
-	// TODO: Step 7 - Update agent index tracking in status
+	// TODO: Step 8 - Update agent index tracking in status
 	// Keep track of which agent indexes are in use
-	// if err := r.updateAgentIndexTracking(ctx, &runnerPool); err != nil {
-	//     log.Error(err, "Failed to update agent index tracking")
-	// }
-
-	// TODO: Step 8 - Update status
-	// Update the status subresource with current state
-	// if err := r.updateStatus(ctx, &runnerPool); err != nil {
-	//     log.Error(err, "Failed to update status")
-	//     return ctrl.Result{}, err
-	// }
+	// 1. Call updateAgentIndexTracking helper function
+	// 2. This tracks which agent numbers (0, 1, 2, etc.) are assigned
+	// 3. Prevents duplicate agent names in Azure DevOps
+	// 4. Log any errors but don't fail reconciliation
 
 	log.Info("Reconciliation completed successfully")
 
