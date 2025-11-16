@@ -17,13 +17,11 @@ limitations under the License.
 package v1
 
 import (
-	"time"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type RunnerPoolSpec struct {
-	//+kubebuilder:validation:Pattern=`^https:\/\/[a-zA-Z0-9.-]+\/[a-zA-Z0-9_.-]+$`
+	// +kubebuilder:validation:Pattern=`^https:\/\/[a-zA-Z0-9.-]+\/[a-zA-Z0-9_.-]+$`
 	AzURL         string `json:"azUrl"`
 	Pool          string `json:"pool"`
 	PATSecretName string `json:"patSecretName"`
@@ -110,7 +108,7 @@ type RunnerPoolStatus struct {
 	ConnectionStatus string             `json:"connectionStatus,omitempty"`
 	OrganizationName string             `json:"organizationName,omitempty"`
 	PoolName         string             `json:"poolName,omitempty"`
-	LastPolled       time.Time          `json:"lastPolled,omitempty"`
+	LastPolled       metav1.Time        `json:"lastPolled,omitempty"`
 	LastError        string             `json:"lastError,omitempty"`
 }
 

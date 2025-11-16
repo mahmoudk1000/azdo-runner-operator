@@ -36,6 +36,7 @@ import (
 
 	opentoolsmfv1 "github.com/mahmoudk1000/azdo-runner-operator/api/v1"
 	"github.com/mahmoudk1000/azdo-runner-operator/internal/controller"
+	webhookopentoolsmfv1 "github.com/mahmoudk1000/azdo-runner-operator/internal/webhook/v1"
 )
 
 var (
@@ -260,6 +261,13 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "RunnerPool")
 		os.Exit(1)
+	}
+	// nolint:goconst
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = webhookopentoolsmfv1.SetupRunnerPoolWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "RunnerPool")
+			os.Exit(1)
+		}
 	}
 	// +kubebuilder:scaffold:builder
 

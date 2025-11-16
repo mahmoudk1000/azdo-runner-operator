@@ -24,8 +24,9 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -81,16 +82,20 @@ func (r *RunnerPoolReconciler) Reconcile(
 
 	// TODO: Step 1 - Fetch the RunnerPool resource
 	// Get the RunnerPool from Kubernetes API
-	var runnerPool opentoolsmfv1.RunnerPool
-	if err := r.Get(ctx, req.NamespacedName, &runnerPool); err != nil {
-		// If not found, it was deleted - nothing to do
-		// Otherwise, return error to retry
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+	runnerPool := &opentoolsmfv1.RunnerPool{}
+	err := r.Get(ctx, req.NamespacedName, runnerPool)
+	if err != nil {
+		if errors.IsNotFound(err) {
+			log.Info("RunnerPool resource not found. Ignoring since object must be deleted.")
+			return ctrl.Result{}, nil
+		}
+		log.Error(err, "failed to get RunnerPool")
+		return ctrl.Result{}, err
 	}
 
 	// TODO: Step 2 - Handle deletion (finalizers)
 	// Check if the resource is being deleted
-	if !runnerPool.ObjectMeta.DeletionTimestamp.IsZero() {
+	if !runnerPool.DeletionTimestamp.IsZero() {
 		// Resource is being deleted
 		// TODO: Implement cleanup logic:
 		// 1. Unregister all agents from Azure DevOps
@@ -124,7 +129,7 @@ func (r *RunnerPoolReconciler) Reconcile(
 	//     return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	// }
 
-	patToken, err := r.getPATToken(ctx, &runnerPool)
+	patToken, err := r.getPATToken(ctx, runnerPool)
 	if err != nil {
 		log.Error(err, "secret: ", runnerPool.Spec.PATSecretName, "does not exist or is invalid")
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
@@ -148,7 +153,7 @@ func (r *RunnerPoolReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	if err := r.updateStatus(ctx, &runnerPool, pollResult); err != nil {
+	if err := r.updateStatus(ctx, runnerPool, pollResult); err != nil {
 		return ctrl.Result{}, err
 	}
 
@@ -219,7 +224,7 @@ func (r *RunnerPoolReconciler) updateStatus(
 	rp.Status.ConnectionStatus = "Connected"
 	rp.Status.OrganizationName = pollResult.OrganizationName
 	rp.Status.PoolName = pollResult.PoolName
-	rp.Status.LastPolled = time.Now()
+	rp.Status.LastPolled = metav1.Now()
 	rp.Status.LastError = ""
 
 	return r.Status().Update(ctx, rp)
