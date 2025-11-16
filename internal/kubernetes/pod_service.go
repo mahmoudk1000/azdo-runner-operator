@@ -30,11 +30,7 @@ import (
 // PodService handles all pod-related operations for runner agents
 // Each Azure DevOps agent runs in a separate Kubernetes pod
 type PodService struct {
-	// client is the Kubernetes client for CRUD operations on pods
 	client client.Client
-
-	// TODO: Add logger
-	// logger logr.Logger
 }
 
 // NewPodService creates a new pod service

@@ -33,6 +33,7 @@ import (
 
 	opentoolsmfv1 "github.com/mahmoudk1000/azdo-runner-operator/api/v1"
 	"github.com/mahmoudk1000/azdo-runner-operator/internal/azdo"
+	"github.com/mahmoudk1000/azdo-runner-operator/internal/kubernetes"
 )
 
 // RunnerPoolReconciler reconciles a RunnerPool object
@@ -42,11 +43,10 @@ type RunnerPoolReconciler struct {
 	Scheme *runtime.Scheme
 	// TODO: Add your service dependencies here:
 	AzDoClient *azdo.Client
-	// PodService     *kubernetes.PodService
+	PodService *kubernetes.PodService
 	// PollingService *azdo.PollingService
 }
 
-// RBAC permissions - these generate RBAC manifests
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=opentools.mf.opentools.mf,resources=runnerpools/finalizers,verbs=update
@@ -111,6 +111,13 @@ func (r *RunnerPoolReconciler) Reconcile(
 			log.Error(statusErr, "Failed to update status")
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	} else {
+		runnerPool.Status.ConnectionStatus = "Connected"
+		runnerPool.Status.LastError = ""
+		runnerPool.Status.LastPolled = metav1.Now()
+		if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+			log.Info("status update after successful client creation failed")
+		}
 	}
 	defer r.AzDoClient.Close()
 
@@ -198,20 +205,6 @@ func (r *RunnerPoolReconciler) getPATToken(
 	}
 
 	return string(token), nil
-}
-
-func (r *RunnerPoolReconciler) updateStatus(
-	ctx context.Context,
-	rp *opentoolsmfv1.RunnerPool,
-	pollResult *azdo.PollResult,
-) error {
-	rp.Status.ConnectionStatus = "Connected"
-	rp.Status.OrganizationName = pollResult.OrganizationName
-	rp.Status.PoolName = pollResult.PoolName
-	rp.Status.LastPolled = metav1.Now()
-	rp.Status.LastError = ""
-
-	return r.Status().Update(ctx, rp)
 }
 
 // SetupWithManager sets up the controller with the Manager.
