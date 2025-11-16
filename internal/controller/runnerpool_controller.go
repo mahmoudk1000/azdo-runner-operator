@@ -29,12 +29,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	opentoolsmfv1 "github.com/mahmoudk1000/azdo-runner-operator/api/v1"
 	"github.com/mahmoudk1000/azdo-runner-operator/internal/azdo"
 	"github.com/mahmoudk1000/azdo-runner-operator/internal/kubernetes"
 )
+
+var finalizer = opentoolsmfv1.GroupVersion.Group + "/finalizer"
 
 // RunnerPoolReconciler reconciles a RunnerPool object
 // This is the core of the operator - it implements the reconciliation loop
@@ -75,8 +78,6 @@ func (r *RunnerPoolReconciler) Reconcile(
 
 	log.Info("Reconciling RunnerPool", "namespace", req.Namespace, "name", req.Name)
 
-	// TODO: Step 1 - Fetch the RunnerPool resource
-	// Get the RunnerPool from Kubernetes API
 	runnerPool := &opentoolsmfv1.RunnerPool{}
 	err := r.Get(ctx, req.NamespacedName, runnerPool)
 	if err != nil {
@@ -88,8 +89,6 @@ func (r *RunnerPoolReconciler) Reconcile(
 		return ctrl.Result{}, err
 	}
 
-	// TODO: Step 2 - Get PAT from secret and initialize Azure DevOps client
-	// Initialize client early so it's available for deletion cleanup
 	patToken, err := r.getPATToken(ctx, runnerPool)
 	if err != nil {
 		log.Error(err, "Failed to get PAT from secret", "secret", runnerPool.Spec.PATSecretName)
@@ -101,10 +100,9 @@ func (r *RunnerPoolReconciler) Reconcile(
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
 	}
 
-	// Create Azure DevOps client for this specific RunnerPool
 	r.AzDoClient, err = azdo.NewClient(runnerPool.Spec.AzURL, patToken)
 	if err != nil {
-		log.Error(err, "Failed to create AzDO client")
+		log.Error(err, "Failed to create AzDo client")
 		runnerPool.Status.LastError = fmt.Sprintf("failed to create AzDO client: %v", err)
 		runnerPool.Status.ConnectionStatus = "Error"
 		if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
@@ -121,21 +119,36 @@ func (r *RunnerPoolReconciler) Reconcile(
 	}
 	defer r.AzDoClient.Close()
 
-	// TODO: Step 3 - Handle deletion (finalizers)
-	// Check if the resource is being deleted
 	if !runnerPool.DeletionTimestamp.IsZero() {
-		// Resource is being deleted
-		// TODO: Implement cleanup logic:
-		// 1. Unregister all agents from Azure DevOps (use r.AzDoClient)
-		// 2. Delete all pods
-		// 3. Delete PVCs if configured to do so
-		// 4. Unregister from polling service
-		// 5. Remove finalizer so resource can be deleted
-
 		log.Info("RunnerPool is being deleted, cleaning up resources")
+		pool, err := r.AzDoClient.GetPool(ctx, runnerPool.Spec.Pool)
+		if err != nil {
+			log.Error(err, "failed to get pool ID during deletion")
+			runnerPool.Status.LastError = "failed to get pool ID during deletion"
+			if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+				log.Error(statusErr, "Failed to update status")
+			}
+		}
+		agents, err := r.AzDoClient.ListAgents(ctx, *pool.Id)
+		if err != nil {
+			log.Error(err, "failed to fetch agents during deletion")
+		}
+		for _, a := range *agents {
+			err := r.AzDoClient.DeleteAgent(ctx, *pool.Id, *a.Id)
+			if err != nil {
+				log.Error(err, "failed to delete agent during deletion", "agentID", *a.Id)
+			}
+			err = r.PodService.DeletePod(ctx, req.Namespace, *a.Name)
+			if err != nil {
+				log.Error(err, "failed to delete pod during deletion", "podName", *a.Name)
+			}
+		}
 
-		// TODO: Call cleanup methods
-		// Example: r.cleanupAgents(ctx, runnerPool)
+		if controllerutil.RemoveFinalizer(runnerPool, finalizer) {
+			if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+				log.Error(statusErr, "Failed to update status during finalizer removal")
+			}
+		}
 
 		return ctrl.Result{}, nil
 	}
@@ -146,6 +159,13 @@ func (r *RunnerPoolReconciler) Reconcile(
 	// 2. If not present, add it using controllerutil.AddFinalizer
 	// 3. Update the resource in Kubernetes API
 	// 4. Return if update fails
+	if !controllerutil.ContainsFinalizer(runnerPool, finalizer) {
+		controllerutil.AddFinalizer(runnerPool, finalizer)
+		if statusErr := r.Status().Update(ctx, runnerPool); statusErr != nil {
+			log.Error(statusErr, "failed to add finalizer to RunnerPool", runnerPool.Name)
+			return ctrl.Result{}, nil
+		}
+	}
 
 	// TODO: Step 5 - Poll Azure DevOps for pool information
 	// Query Azure DevOps to get current state of the runner pool
