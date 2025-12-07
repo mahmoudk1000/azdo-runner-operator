@@ -66,16 +66,17 @@ RUN if [ "$RUNTIME_TYPE" = "java" ]; then \
     && echo ".net=true" >> /tmp/capabilities.txt \
     && echo "nuget=true" >> /tmp/capabilities.txt; \
     elif [ "$RUNTIME_TYPE" = "nodejs" ]; then \
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    curl -fsSL https://deb.nodesource.com/setup_${NODEJS_VERSION}.x | bash - && \
     apt-get install -y --no-install-recommends \
     nodejs \
+    chromium-browser \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* \
     && echo "node=true" > /tmp/capabilities.txt \
-    echo "node=true" > /tmp/capabilities.txt \
     && echo "nodejs=true" >> /tmp/capabilities.txt \
     && echo "npm=true" >> /tmp/capabilities.txt \
-    && echo "javascript=true" >> /tmp/capabilities.txt; \
+    && echo "javascript=true" >> /tmp/capabilities.txt \
+    && export CHROME_BIN=$(which chromium); \
     else \
     echo "base=true" > /tmp/capabilities.txt; \
     fi
@@ -109,3 +110,4 @@ WORKDIR /azp
 ENV RUNTIME_TYPE=${RUNTIME_TYPE}
 
 ENTRYPOINT ["/azp/start.sh"]
+
